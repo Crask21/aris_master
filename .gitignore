@@ -48,6 +48,35 @@ coverage.xml
 *.cover
 *.py.cover
 .hypothesis/
+
+# Project-specific directories
+data/raw/
+data/processed/
+data/synthetic/
+outputs/models/
+outputs/results/
+outputs/visualizations/
+outputs/logs/
+experiments/
+
+# Model files
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+
+# Logs
+*.log
+logs/
+
+# Wandb
+wandb/
+
+# Large data files
+*.zip
+*.tar.gz
+*.tar.bz2
 .pytest_cache/
 cover/
 
