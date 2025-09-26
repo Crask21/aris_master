@@ -1,0 +1,121 @@
+# Configuration for Synthetic Data Generation for Waste Segmentation
+
+# Data Configuration
+data:
+  # Raw data paths
+  raw_data_dir: "data/raw"
+  processed_data_dir: "data/processed"
+  synthetic_data_dir: "data/synthetic"
+  
+  # Dataset splits
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+  
+  # Image preprocessing
+  image_size: [512, 512]  # [height, width]
+  normalize: true
+  augmentation: true
+  
+  # Data loading
+  batch_size: 8
+  num_workers: 4
+  pin_memory: true
+
+# Model Configuration
+model:
+  # Segmentation model
+  segmentation:
+    name: "unet"  # Options: unet, deeplabv3plus
+    n_channels: 3
+    n_classes: 2  # Background + waste
+    pretrained: false
+  
+  # Generation model (GAN)
+  generator:
+    latent_dim: 100
+    feature_map_size: 64
+    img_channels: 3
+  
+  discriminator:
+    feature_map_size: 64
+    img_channels: 3
+
+# Training Configuration
+training:
+  # General training parameters
+  epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  
+  # GAN specific parameters
+  gan:
+    g_lr: 0.0002  # Generator learning rate
+    d_lr: 0.0002  # Discriminator learning rate
+    beta1: 0.5    # Adam optimizer beta1
+    beta2: 0.999  # Adam optimizer beta2
+    lambda_gp: 10 # Gradient penalty weight (for WGAN-GP)
+    
+  # Segmentation specific parameters
+  segmentation:
+    loss_function: "cross_entropy"  # Options: cross_entropy, dice, focal
+    class_weights: [1.0, 2.0]  # Weight for [background, waste]
+    
+  # Scheduler
+  scheduler:
+    type: "step"  # Options: step, cosine, plateau
+    step_size: 30
+    gamma: 0.1
+
+# Evaluation Configuration
+evaluation:
+  metrics:
+    - "accuracy"
+    - "iou"
+    - "dice"
+    - "precision"
+    - "recall"
+    - "f1"
+    
+  # Evaluation frequency
+  eval_frequency: 5  # Every N epochs
+  save_best_model: true
+
+# Logging and Saving
+logging:
+  log_dir: "outputs/logs"
+  experiment_name: "waste_segmentation_experiment"
+  log_frequency: 10  # Log every N batches
+  
+  # Wandb configuration (optional)
+  use_wandb: false
+  wandb_project: "waste-segmentation"
+  wandb_entity: null
+
+# Output Configuration
+output:
+  model_save_dir: "outputs/models"
+  results_save_dir: "outputs/results"
+  visualization_save_dir: "outputs/visualizations"
+  checkpoint_frequency: 10  # Save checkpoint every N epochs
+
+# Hardware Configuration
+hardware:
+  device: "auto"  # Options: auto, cpu, cuda
+  mixed_precision: true
+  deterministic: true
+  benchmark: true
+
+# Synthetic Data Generation Configuration
+synthetic:
+  # Number of synthetic samples to generate
+  num_samples: 1000
+  
+  # Generation parameters
+  generation_batch_size: 32
+  
+  # Quality control
+  fid_threshold: 50.0  # Fréchet Inception Distance threshold
+  
+  # Augmentation for synthetic data
+  synthetic_augmentation: true
