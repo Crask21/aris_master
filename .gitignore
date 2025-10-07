@@ -1,3 +1,8 @@
+# ------------------------- self inserted gitignores ------------------------- #
+*coco2017/
+
+
+# ---------------------------- pregenerated files ---------------------------- #
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
