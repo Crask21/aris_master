@@ -1,18 +1,27 @@
 [project]
-name = "waste-segmentation-synthesis"
+name = "venv-da-fusion"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 dependencies = [
-    "diffusers[torch]>=0.35.1",
-    "matplotlib>=3.10.6",
-    "numpy>=2.3.3",
-    "pandas>=2.3.2",
+    "accelerate==0.16.0",
+    "diffusers==0.14.0",
+    "huggingface-hub==0.13.4",
+    "matplotlib>=3.9.4",
+    "pandas>=2.3.3",
     "pycocotools>=2.0.10",
-    "scipy>=1.16.2",
+    "scipy>=1.13.1",
     "seaborn>=0.13.2",
-    "torch>=2.8.0",
-    "torchvision>=0.23.0",
-    "transformers>=4.56.2",
+    "torch==1.12.1+cu116",
+    "torchvision==0.13.1+cu116",
+    "transformers==4.25.1",
 ]
+
+# Configure PyTorch CUDA index
+[[tool.uv.index]]
+name = "pytorch-cu116"
+url = "https://download.pytorch.org/whl/cu116"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu116" }
+torchvision = { index = "pytorch-cu116" }
