@@ -1,5 +1,5 @@
 [project]
-name = "waste-segmentation-synthesis"
+name = "ms"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -7,5 +7,6 @@ requires-python = ">=3.11"
 dependencies = [
     "matplotlib>=3.10.6",
     "numpy>=2.3.3",
+    "pillow>=11.3.0",
     "torch>=2.8.0",
 ]
