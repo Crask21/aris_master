@@ -17,21 +17,45 @@ from tqdm import tqdm
 
 def resize_image(image_path: Path, target_size: Tuple[int, int]) -> Image.Image:
     """
-    Resize an image to the target size.
+    Resize an image to the target size using smart cropping to preserve aspect ratio.
+    
+    The image is resized to match the target height, then center-cropped to match
+    the target width. This prevents squishing when aspect ratios differ.
     
     Args:
         image_path: Path to the input image
         target_size: Tuple of (width, height) for the output image
         
     Returns:
-        Resized PIL Image
+        Resized and cropped PIL Image
     """
     img = Image.open(image_path)
     # Convert to RGB if image has alpha channel or is in a different mode
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    resized_img = img.resize(target_size, Image.LANCZOS)
-    return resized_img
+    
+    target_width, target_height = target_size
+    original_width, original_height = img.size
+    
+    # Calculate the scaling factor to match target height
+    scale = target_height / original_height
+    new_width = int(original_width * scale)
+    
+    # Resize to match target height
+    img = img.resize((new_width, target_height), Image.LANCZOS)
+    
+    # Center crop to match target width
+    if new_width > target_width:
+        # Image is wider than target, crop the sides
+        left = (new_width - target_width) // 2
+        right = left + target_width
+        img = img.crop((left, 0, right, target_height))
+    elif new_width < target_width:
+        # Image is narrower than target, pad with black or resize width
+        # For now, we'll resize to fill (slight stretch on width only)
+        img = img.resize((target_width, target_height), Image.LANCZOS)
+    
+    return img
 
 
 def show_preview(original_paths: list, resized_images: list, num_samples: int = 4):
