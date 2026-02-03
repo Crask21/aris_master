@@ -1,12 +1,12 @@
 """
 Example usage of the ConfigLoader.
 """
-from src.config_loader.config_loader import ConfigLoader, load_config
+from src.config_loader.config_loader_json import ConfigLoaderJSON
 
 
 def main():
     # Example 1: Load configuration
-    config = ConfigLoader('config/diffusion_model.yaml')
+    config = ConfigLoaderJSON('config/diffusion_model.json')
     
     # Example 2: Get entire config
     print("Entire config:")
@@ -67,8 +67,6 @@ def main():
     # config.save('config/diffusion_model_updated.yaml')
     
     # Example 11: Alternative convenience function
-    config2 = load_config('config/config.yaml')
-    print("Loaded config.yaml")
 
 
 if __name__ == '__main__':

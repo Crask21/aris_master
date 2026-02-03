@@ -1,14 +1,14 @@
 """
-Simple YAML configuration loader with easy access and modification capabilities.
+Simple JSON configuration loader with easy access and modification capabilities.
 """
-import yaml
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 
-class ConfigLoader:
+class ConfigLoaderJSON:
     """
-    A simple configuration loader for YAML files.
+    A simple configuration loader for JSON files.
     
     Provides easy methods to:
     - Load entire or partial config sections
@@ -17,7 +17,7 @@ class ConfigLoader:
     - Save changes back to file
     
     Example:
-        >>> config = ConfigLoader('config.yaml')
+        >>> config = ConfigLoaderJSON('config.json')
         >>> batch_size = config.get('data.batch_size')
         >>> config.set('data.batch_size', 32)
         >>> config.save()
@@ -28,7 +28,7 @@ class ConfigLoader:
         Initialize the config loader.
         
         Args:
-            config_path: Path to the YAML configuration file
+            config_path: Path to the JSON configuration file
         """
         self.config_path = Path(config_path)
         self._config: Dict[str, Any] = {}
@@ -45,7 +45,7 @@ class ConfigLoader:
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
         
         with open(self.config_path, 'r') as f:
-            self._config = yaml.safe_load(f) or {}
+            self._config = json.load(f) or {}
         
         return self._config
     
@@ -166,16 +166,18 @@ class ConfigLoader:
         
         self._config[section].update(values)
     
-    def save(self, output_path: Optional[Union[str, Path]] = None) -> None:
+    def save(self, output_path: Optional[Union[str, Path]] = None, indent: int = 2) -> None:
         """
         Save the current configuration to file.
         
         Args:
             output_path: Optional path to save to. If None, saves to original file.
+            indent: Number of spaces for indentation (default: 2)
         
         Example:
             >>> config.save()  # Save to original file
-            >>> config.save('new_config.yaml')  # Save to new file
+            >>> config.save('new_config.json')  # Save to new file
+            >>> config.save(indent=4)  # Save with 4-space indentation
         """
         save_path = Path(output_path) if output_path else self.config_path
         
@@ -183,7 +185,7 @@ class ConfigLoader:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(save_path, 'w') as f:
-            yaml.safe_dump(self._config, f, default_flow_style=False, sort_keys=False)
+            json.dump(self._config, f, indent=indent, ensure_ascii=False)
     
     def has(self, key: str) -> bool:
         """
@@ -290,23 +292,23 @@ class ConfigLoader:
         return key in self._config
     
     def __repr__(self) -> str:
-        return f"ConfigLoader('{self.config_path}')"
+        return f"ConfigLoaderJSON('{self.config_path}')"
     
     def __str__(self) -> str:
-        return yaml.safe_dump(self._config, default_flow_style=False)
+        return json.dumps(self._config, indent=2, ensure_ascii=False)
 
 
-def load_config(config_path: Union[str, Path]) -> ConfigLoader:
+def load_config_json(config_path: Union[str, Path]) -> ConfigLoaderJSON:
     """
-    Convenience function to create a ConfigLoader instance.
+    Convenience function to create a ConfigLoaderJSON instance.
     
     Args:
-        config_path: Path to the YAML configuration file
+        config_path: Path to the JSON configuration file
     
     Returns:
-        ConfigLoader instance
+        ConfigLoaderJSON instance
     
     Example:
-        >>> config = load_config('config.yaml')
+        >>> config = load_config_json('config.json')
     """
-    return ConfigLoader(config_path)
+    return ConfigLoaderJSON(config_path)

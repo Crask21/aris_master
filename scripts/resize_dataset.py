@@ -9,6 +9,9 @@ import shutil
 from pathlib import Path
 from typing import Tuple
 
+from scripts.training_session.save_config import save_args_as_config
+from scripts.training_session.generate_data_summary import generate_data_summary
+
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
@@ -214,6 +217,8 @@ def main():
     )
     
     args = parser.parse_args()
+    save_args_as_config(args, output_dir=args.out)
+    generate_data_summary(args.input, args.out)
     
     process_dataset(
         input_dir=args.input,
