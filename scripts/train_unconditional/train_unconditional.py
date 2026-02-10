@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import shutil
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -29,6 +30,15 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+# --------------------------------- AP NOTES --------------------------------- #
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from summarize_training.save_config import save_args_as_config
+    from summarize_training.generate_config_summary import generate_data_summary
+except ImportError:
+    print("Could not import custom training session modules. Make sure you have the 'summarize_training' folder.", file=sys.stderr)
+    pass
+# ------------------------------- AP NOTES END ------------------------------- #
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.37.0.dev0")
@@ -285,6 +295,14 @@ def parse_args():
         action="store_true",
         help="Preserve 16/32-bit image precision by avoiding 8-bit RGB conversion while still producing 3-channel tensors.",
     )
+    # --------------------------------- AP NOTES --------------------------------- #
+    parser.add_argument(
+        "--comment",
+        type=str,
+        default="",
+        help="Adds a comment to the notes file saved alongside the training configuration.",
+    )
+    # ------------------------------- AP NOTES END ------------------------------- #
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -294,7 +312,7 @@ def parse_args():
     if args.dataset_name is None and args.train_data_dir is None:
         raise ValueError("You must specify either a dataset name from the hub or a train data directory.")
 
-    return args
+    return parser, args
 
 # ---------------------- DATALOADER PREVIEW (ADDED CODE) --------------------- #
 def preview_dataloader(dataloader, num_images=8):
@@ -757,17 +775,24 @@ def main(args):
                 if args.use_ema:
                     ema_model.restore(unet.parameters())
                 # -------------------------------- ADDED CODE -------------------------------- #
+                print("Latents shape:", latents.shape)
                 # decode the latents with VAE in smaller batches to avoid OOM
                 decoded_images = []
                 vae_batch_size = 4  # Process 4 images at a time
                 with torch.no_grad():
                     for i in range(0, len(latents), vae_batch_size):
                         batch = latents[i:i+vae_batch_size] / vae.config.scaling_factor
-                        decoded_batch = vae.decode(batch, return_dict=False)[0]
+                        
+                        if not isinstance(batch, torch.Tensor):
+                            batch = torch.from_numpy(batch)
+                        batch = batch.permute(0, 3, 1, 2).contiguous()
+                        print("batch shape:", batch.shape)
+                        decoded_batch = vae.decode(batch.to(vae.device), return_dict=False)[0]
                         decoded_images.append(decoded_batch.cpu())
                         del batch, decoded_batch
                         torch.cuda.empty_cache()
                 images = torch.cat(decoded_images, dim=0)
+                print("Final decoded images shape:", images.shape)
 
                 #Save decoded images
                 save_images = (images + 1) / 2  # Scale to [0, 1]
@@ -829,5 +854,16 @@ def main(args):
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    parser, args = parse_args()
+    # --------------------------------- AP NOTES --------------------------------- #
+    try:
+        save_args_as_config(args=args, parser=parser) # config.json
+    except Exception as e:
+        print(f"WARNING: Failed to save config: {e}", file=sys.stderr)
+    
+    try:
+        generate_data_summary(dataset_path=args.train_data_dir, output_path=args.output_dir, comment=args.comment) # notes.md
+    except Exception as e:
+        print(f"WARNING: Failed to generate data summary: {e}", file=sys.stderr)
+    # ------------------------------- AP NOTES END ------------------------------- #
     main(args)

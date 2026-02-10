@@ -88,6 +88,7 @@ def main():
             # Load VAE
             vae = AutoencoderKL.from_pretrained(args.vae_dir)
             vae = vae.to("cuda")
+            vae.eval()
             
             # Generate latents
             images = pipe(
@@ -96,8 +97,10 @@ def main():
                 output_type="latent"
             ).images
             
-            # Permute images from (B, H, W, C) to (B, C, H, W)
-            images = torch.tensor(images).permute(0, 3, 1, 2).to("cuda")
+            # Latents are already in (B, C, H, W) format - no permutation needed
+            if not isinstance(images, torch.Tensor):
+                images = torch.tensor(images)
+            images = images.to("cuda")
             print("Generated latents shape:", images.shape)
             
             # Decode with VAE
@@ -106,12 +109,12 @@ def main():
             
             print("Decoded images shape:", images.shape)
             
-            # Convert to PIL
+            # Convert to PIL (images are already in NCHW format)
             images = (images / 2 + 0.5).clamp(0, 1).cpu().permute(0, 2, 3, 1).numpy()
             images = (images * 255).round().astype("uint8")
             
-            # Rotate RGB channels
-            images = images[..., [0, 2, 1]]
+            # Do NOT rotate channels - that was causing the wrong colors
+            # images = images[..., [0, 2, 1]]  # REMOVED
             
             pil_images = [Image.fromarray(image) for image in images]
             images = pil_images

@@ -295,6 +295,14 @@ def parse_args():
         action="store_true",
         help="Preserve 16/32-bit image precision by avoiding 8-bit RGB conversion while still producing 3-channel tensors.",
     )
+    # --------------------------------- AP NOTES --------------------------------- #
+    parser.add_argument(
+        "--comment",
+        type=str,
+        default="",
+        help="Adds a comment to the notes file saved alongside the training configuration.",
+    )
+    # ------------------------------- AP NOTES END ------------------------------- #
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -832,7 +840,7 @@ if __name__ == "__main__":
         print(f"WARNING: Failed to save config: {e}", file=sys.stderr)
     
     try:
-        generate_data_summary(dataset_path=args.train_data_dir, output_path=args.output_dir) # notes.md
+        generate_data_summary(dataset_path=args.train_data_dir, output_path=args.output_dir, comment=args.comment) # notes.md
     except Exception as e:
         print(f"WARNING: Failed to generate data summary: {e}", file=sys.stderr)
     # ------------------------------- AP NOTES END ------------------------------- #

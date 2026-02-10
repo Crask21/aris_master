@@ -317,7 +317,7 @@ def format_data_summary(structure_type: str, data: Dict, dataset_path: Path, con
     return "\n".join(lines)
 
 
-def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: Path, verbose: bool = True):
+def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: Path, comment: str = "", verbose: bool = True):
     """
     Update existing notes.md with new data summary or create a new file.
     Uses the template from training/template/notes.md when creating a new file.
@@ -367,7 +367,7 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
                 content,
                 count=1
             )
-        
+        # ----------------------- Configuration Summary section ---------------------- #
         # Check if Configuration Summary section exists
         if "## Configuration Summary" in content:
             # Replace existing Configuration Summary section
@@ -399,6 +399,42 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
             notes_path.write_text(content, encoding="utf-8")
             if verbose:
                 print(f"Added Configuration Summary to existing file: {notes_path}")
+                
+                
+        # -------------------- "Why was this model trained?" section ------------------- #
+                
+        if "## Why was this model trained?" in content:
+            # Replace existing Configuration Summary section
+            # Find the start of Configuration Summary
+            start_marker = "## Why was this model trained?"
+            start_idx = content.find(start_marker)
+            
+            # Find the next section (starts with ## and is not on the same line)
+            # We need to find "\n## " to ensure we're finding the next section header
+            search_start = start_idx + len(start_marker)
+            next_section_idx = content.find("\n## ", search_start)
+            
+            if next_section_idx == -1:
+                # Data Summary is the last section
+                new_content = content[:start_idx]  +start_marker+"\n\n" + comment
+            else:
+                # Insert new summary and preserve everything after the next section
+                
+                new_content = content[:start_idx] +start_marker+"\n\n" + comment + "\n" + content[next_section_idx + 1:]
+            
+            notes_path.write_text(new_content, encoding="utf-8")
+            if verbose:
+                print(f"Updated existing Why was this model trained? section in: {notes_path}")
+        else:
+            # Append Why was this model trained? section
+            if not content.endswith("\n"):
+                content += "\n"
+            content += "\n" + comment
+            print("Appending Why was this model trained? section")
+            
+            notes_path.write_text(content, encoding="utf-8")
+            if verbose:
+                print(f"Added Why was this model trained? section to existing file: {notes_path}")
     else:
         # Create new notes.md using template
         # Find template directory
@@ -428,6 +464,12 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
             if "**Date:**" in template_content and "**Creation:**" not in template_content:
                 template_content = template_content.replace("**Date:**", f"**Creation:** {current_date}\n\n**Last Training session:** {current_date}")
             
+            if "## Why was this model trained?" in template_content:
+                # Fill in comment if provided
+                if comment:
+                    template_content = template_content.replace("## Why was this model trained?\n\n", f"## Why was this model trained?\n\n{comment}\n\n")
+                else:
+                    template_content = template_content.replace("## Why was this model trained?\n\n", "## Why was this model trained?\n\n_Because...\n\n")
             # Check if template has Configuration Summary section
             if "## Configuration Summary" in template_content:
                 # Replace/append to Configuration Summary section in template
@@ -460,11 +502,7 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
 
 ## Why was this model trained?
 
-Because...
-
-- A
-- B
-- C
+{comment}
 
 {data_summary}
 """
@@ -478,6 +516,7 @@ def generate_data_summary(
     dataset_path: Path,
     output_path: Path = None,
     images_subdir: str = "images",
+    comment: str = "",
     verbose: bool = True
 ) -> Path:
     """
@@ -553,7 +592,7 @@ def generate_data_summary(
     data_summary = format_data_summary(structure_type, data, dataset_path, config)
     
     # Update or create notes.md
-    update_or_create_notes(output_path, data_summary, dataset_path, verbose)
+    update_or_create_notes(output_path, data_summary, dataset_path, comment, verbose)
     
     if verbose:
         print(f"✓ Configuration summary generated successfully: {output_path}")

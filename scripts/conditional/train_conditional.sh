@@ -16,29 +16,30 @@ DATASET_DIR="/media/aris/Data/master2025dev/datasets"
 TRAINING_DIR="/media/aris/Data/master2025dev/aris_master/training/"
 
 # Define session name
-SESSION_NAME="04-02_ddim_ema_vae_impregnated-wood_128"
+SESSION_NAME="07-02_2-class-conditioning-wood-plastic_128"
 
-accelerate launch train_unconditional.py \
+accelerate launch train_conditional.py \
   --output_dir="${TRAINING_DIR}${SESSION_NAME}" \
   --train_data_dir="$DATASET_DIR/wood/4_main_categories_512x512/train/impregnated_wood/" \
+  --train_data_dir2="/media/aris/Data/master2025dev/datasets/plastic/all_plastic_categories/hard_plastic"\
   --resolution=128 --center_crop --random_flip \
-  --train_batch_size=16 \
+  --train_batch_size=32 \
   --num_epochs=1000 \
   --gradient_accumulation_steps=1 \
   --use_ema \
   --learning_rate=1e-4 \
   --lr_warmup_steps=500 \
   --mixed_precision=no \
-  --checkpointing_steps=2000 \
-  --comment="Second attempt at VAE. Let's try give it 1000 epochs and see if that solves our problem." \
+  --checkpointing_steps=5000 \
+  --comment="Conditional training with two datasets" \
   --resume_from_checkpoint="latest"
 
-  python3 inference.py \
-    --model_dir="${TRAINING_DIR}${SESSION_NAME}" \
-    --batch_size=16 \
-    --num_inference_steps=50 \
-    --image_num=1 \
-    --vae
+  # python3 inference.py \
+  #   --model_dir="${TRAINING_DIR}${SESSION_NAME}" \
+  #   --batch_size=16 \
+  #   --num_inference_steps=50 \
+  #   --image_num=1 \
+  #   --vae
 
 
 

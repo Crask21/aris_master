@@ -639,6 +639,8 @@ def main(args):
     local_model_path = "/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned"
     vae = AutoencoderKL.from_pretrained(local_model_path)
     vae.to(accelerator.device)
+    vae.requires_grad_(False)  # Freeze VAE parameters
+    vae.eval()  # Set to evaluation mode
 
     #check for image dimensions
     test_batch = next(iter(train_dataloader))
@@ -781,12 +783,14 @@ def main(args):
                 vae_batch_size = 4  # Process 4 images at a time
                 with torch.no_grad():
                     for i in range(0, len(latents), vae_batch_size):
+                        # Latents are already in correct format (B, C, H, W) and scaled
+                        # We need to unscale them before decoding
                         batch = latents[i:i+vae_batch_size] / vae.config.scaling_factor
                         
                         if not isinstance(batch, torch.Tensor):
                             batch = torch.from_numpy(batch)
-                        batch = batch.permute(0, 3, 1, 2).contiguous()
-                        print("batch shape:", batch.shape)
+                        # DO NOT permute - latents are already in (B, C, H, W) format
+                        print("batch shape before decode:", batch.shape)
                         decoded_batch = vae.decode(batch.to(vae.device), return_dict=False)[0]
                         decoded_images.append(decoded_batch.cpu())
                         del batch, decoded_batch

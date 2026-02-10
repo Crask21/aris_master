@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import diffusers
-from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, DDIMScheduler
+from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel, DDIMScheduler, DDIMPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -116,6 +116,16 @@ def parse_args():
             " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
         ),
     )
+    # -------------------------------- ADDED CODE -------------------------------- #
+    parser.add_argument(
+        "--train_data_dir2",
+        type=str,
+        default=None,
+        help=(
+            "Temp argument for 2 class training data directory"
+        ),
+    )
+    # ------------------------------ END ADDED CODE ------------------------------ #
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -325,6 +335,14 @@ def preview_dataloader(dataloader, num_images=8):
     """
     # Get a batch from the dataloader
     batch = next(iter(dataloader))
+    print("Batch keys:", batch.keys())
+    print("Batch shape:", batch["input"].shape)
+    print("Batch dtype:", batch["input"].dtype)
+    # print class labels if they exist
+    if "class" in batch:
+        print("Class labels in batch:", batch["class"])
+    else:
+        print("No class labels found in batch.")
     images = batch["input"]
     
     # Limit to num_images
@@ -436,23 +454,30 @@ def main(args):
     # Initialize the model
     if args.model_config_name_or_path is None:
         model = UNet2DModel(
-            sample_size=args.resolution//8,  # 8x downsampling
-            in_channels=4,
-            out_channels=4,
+            sample_size=args.resolution,
+            in_channels=3,
+            out_channels=3,
             layers_per_block=2,
-            block_out_channels=(320, 640, 1280, 1280),
+            block_out_channels=(128, 128, 256, 256, 512, 512, 512),
             down_block_types=(
                 "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",
                 "AttnDownBlock2D",
+                "DownBlock2D",
                 "AttnDownBlock2D",
                 "DownBlock2D",
             ),
             up_block_types=(
                 "UpBlock2D",
                 "AttnUpBlock2D",
+                "UpBlock2D",
                 "AttnUpBlock2D",
                 "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
             ),
+            num_class_embeds=2,
         )
     else:
         config = UNet2DModel.load_config(args.model_config_name_or_path)
@@ -511,22 +536,28 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    # Get the datasets: you can either provide your own training and evaluation files (see below)
-    # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
-
-    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
-    # download the dataset.
-    if args.dataset_name is not None:
-        dataset = load_dataset(
-            args.dataset_name,
-            args.dataset_config_name,
-            cache_dir=args.cache_dir,
-            split="train",
-        )
+    # Load datasets from both directories and assign class labels
+    dataset1 = load_dataset("imagefolder", data_dir=args.train_data_dir, cache_dir=args.cache_dir, split="train")
+    dataset2 = load_dataset("imagefolder", data_dir=args.train_data_dir2, cache_dir=args.cache_dir, split="train") if args.train_data_dir2 else None
+    
+    # Add class labels to datasets
+    dataset1 = dataset1.map(lambda x: {"class": 0})
+    if dataset2 is not None:
+        dataset2 = dataset2.map(lambda x: {"class": 1})
+        # Concatenate datasets
+        dataset = datasets.concatenate_datasets([dataset1, dataset2])
     else:
-        dataset = load_dataset("imagefolder", data_dir=args.train_data_dir, cache_dir=args.cache_dir, split="train")
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
+        dataset = dataset1
+    
+    # Shuffle the combined dataset
+    dataset = dataset.shuffle(seed=42)
+    
+    #Display portion of dataset
+    logger.info("Previewing some samples from the dataset:")
+    for i in range(10):
+        sample = dataset[i]
+        logger.info(f"Sample {i}: class={sample['class']}, image size={sample['image'].size}")
+    
 
     # Preprocessing the datasets and DataLoaders creation.
     spatial_augmentations = [
@@ -563,15 +594,24 @@ def main(args):
                 if precise_image.mode == "P":
                     precise_image = precise_image.convert("RGB")
                 processed.append(precision_augmentations(precise_image))
-        return {"input": processed}
+        return {"input": processed, "class": examples["class"]}
 
     logger.info(f"Dataset size: {len(dataset)}")
 
     dataset.set_transform(transform_images)
+    
+    # #Display portion of dataset
+    # logger.info("Previewing some samples from the dataset:")
+    # for i in range(10):
+    #     sample = dataset[i]
+    #     logger.info(f"Sample {i}: class={sample['class']}, image size={sample['image'].size}")
+    
     train_dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers
     )
+    
     preview_dataloader(train_dataloader)
+    
 
     # Initialize the learning rate scheduler
     lr_scheduler = get_scheduler(
@@ -634,27 +674,32 @@ def main(args):
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
-    # -------------------------------- ADDED CODE -------------------------------- #
-    from diffusers import AutoencoderKL
-    local_model_path = "/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned"
-    vae = AutoencoderKL.from_pretrained(local_model_path)
-    vae.to(accelerator.device)
+    # # -------------------------------- ADDED CODE -------------------------------- #
+    # from diffusers import AutoencoderKL
+    # local_model_path = "/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned"
+    # vae = AutoencoderKL.from_pretrained(local_model_path)
+    # vae.to(accelerator.device)
 
-    #check for image dimensions
-    test_batch = next(iter(train_dataloader))
-    test_images = test_batch["input"].to(weight_dtype)
-    with torch.no_grad():
-        latent_dist = vae.encode(test_images).latent_dist
-        latent_samples = latent_dist.sample() * vae.config.scaling_factor
-    logger.info(f"Input image shape: {test_images.shape}, Latent shape: {latent_samples.shape}")
+    # #check for image dimensions
+    # test_batch = next(iter(train_dataloader))
+    # test_images = test_batch["input"].to(weight_dtype)
+    # with torch.no_grad():
+    #     latent_dist = vae.encode(test_images).latent_dist
+    #     latent_samples = latent_dist.sample() * vae.config.scaling_factor
+    # logger.info(f"Input image shape: {test_images.shape}, Latent shape: {latent_samples.shape}")
 
-    # ------------------------------ END ADDED CODE ------------------------------ #
+    # # ------------------------------ END ADDED CODE ------------------------------ #
     # Train!
     for epoch in range(first_epoch, args.num_epochs):
+        
         model.train()
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
+            # ----------------------------------- class ---------------------------------- #
+            class_labels = batch["class"].to(accelerator.device)
+            # --------------------------------- end class -------------------------------- #
+            
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
@@ -662,11 +707,11 @@ def main(args):
                 continue
 
             clean_images = batch["input"].to(weight_dtype)
-            with torch.no_grad():
-                # -------------------------------- ADDED CODE -------------------------------- #
-                latent_dist = vae.encode(clean_images).latent_dist
-                clean_images = latent_dist.sample() * vae.config.scaling_factor
-                # ------------------------------ END ADDED CODE ------------------------------ #
+            # with torch.no_grad():
+            #     # -------------------------------- ADDED CODE -------------------------------- #
+            #     latent_dist = vae.encode(clean_images).latent_dist
+            #     clean_images = latent_dist.sample() * vae.config.scaling_factor
+            #     # ------------------------------ END ADDED CODE ------------------------------ #
 
             # Sample noise that we'll add to the images
             noise = torch.randn(clean_images.shape, dtype=weight_dtype, device=clean_images.device)
@@ -682,7 +727,7 @@ def main(args):
 
             with accelerator.accumulate(model):
                 # Predict the noise residual
-                model_output = model(noisy_images, timesteps).sample
+                model_output = model(noisy_images, timesteps, class_labels=class_labels).sample
 
                 if args.prediction_type == "epsilon":
                     loss = F.mse_loss(model_output.float(), noise.float())  # this could have different weights!
@@ -746,7 +791,7 @@ def main(args):
         progress_bar.close()
 
         accelerator.wait_for_everyone()
-
+        
         # Generate sample images for visual inspection
         if accelerator.is_main_process:
             if epoch % args.save_images_epochs == 0 or epoch == args.num_epochs - 1:
@@ -756,7 +801,7 @@ def main(args):
                     ema_model.store(unet.parameters())
                     ema_model.copy_to(unet.parameters())
 
-                pipeline = DDPMPipeline(
+                pipeline = DDIMPipeline(
                     unet=unet,
                     scheduler=noise_scheduler,
                 )
@@ -764,59 +809,70 @@ def main(args):
                 generator = torch.Generator(device=pipeline.device).manual_seed(0)
                 # run pipeline in inference (sample random noise and denoise)
                 # Get latents from pipeline
+                # Create class labels for evaluation: half class 0, half class 1
+                num_class_0 = args.eval_batch_size // 2
+                num_class_1 = args.eval_batch_size - num_class_0
+                class_labels = torch.cat([
+                    torch.zeros(num_class_0, dtype=torch.long),
+                    torch.ones(num_class_1, dtype=torch.long)
+                ]).to(accelerator.device)
+                
                 latents = pipeline(
                     generator=generator,
                     batch_size=args.eval_batch_size,
                     num_inference_steps=args.ddpm_num_inference_steps,
                     output_type="latent",
+                    class_labels=class_labels,
                     return_dict=False
                 )[0]
 
                 if args.use_ema:
                     ema_model.restore(unet.parameters())
-                # -------------------------------- ADDED CODE -------------------------------- #
-                print("Latents shape:", latents.shape)
-                # decode the latents with VAE in smaller batches to avoid OOM
-                decoded_images = []
-                vae_batch_size = 4  # Process 4 images at a time
-                with torch.no_grad():
-                    for i in range(0, len(latents), vae_batch_size):
-                        batch = latents[i:i+vae_batch_size] / vae.config.scaling_factor
+                # # -------------------------------- ADDED CODE -------------------------------- #
+                # print("Latents shape:", latents.shape)
+                # # decode the latents with VAE in smaller batches to avoid OOM
+                # decoded_images = []
+                # vae_batch_size = 4  # Process 4 images at a time
+                # with torch.no_grad():
+                #     for i in range(0, len(latents), vae_batch_size):
+                #         batch = latents[i:i+vae_batch_size] / vae.config.scaling_factor
                         
-                        if not isinstance(batch, torch.Tensor):
-                            batch = torch.from_numpy(batch)
-                        batch = batch.permute(0, 3, 1, 2).contiguous()
-                        print("batch shape:", batch.shape)
-                        decoded_batch = vae.decode(batch.to(vae.device), return_dict=False)[0]
-                        decoded_images.append(decoded_batch.cpu())
-                        del batch, decoded_batch
-                        torch.cuda.empty_cache()
-                images = torch.cat(decoded_images, dim=0)
-                print("Final decoded images shape:", images.shape)
+                #         if not isinstance(batch, torch.Tensor):
+                #             batch = torch.from_numpy(batch)
+                #         batch = batch.permute(0, 3, 1, 2).contiguous()
+                #         print("batch shape:", batch.shape)
+                #         decoded_batch = vae.decode(batch.to(vae.device), return_dict=False)[0]
+                #         decoded_images.append(decoded_batch.cpu())
+                #         del batch, decoded_batch
+                #         torch.cuda.empty_cache()
+                # images = torch.cat(decoded_images, dim=0)
+                # print("Final decoded images shape:", images.shape)
 
-                #Save decoded images
-                save_images = (images + 1) / 2  # Scale to [0, 1]
-                grid_size = int(np.ceil(np.sqrt(args.eval_batch_size)))
-                fig, axes = plt.subplots(grid_size, grid_size, figsize=(10, 10))
-                axes = axes.flatten()
+                # #Save decoded images
+                # save_images = (images + 1) / 2  # Scale to [0, 1]
+                # grid_size = int(np.ceil(np.sqrt(args.eval_batch_size)))
+                # fig, axes = plt.subplots(grid_size, grid_size, figsize=(10, 10))
+                # axes = axes.flatten()
 
-                for img, ax in zip(save_images, axes):
-                    ax.imshow(img.permute(1, 2, 0).cpu().numpy())
-                    ax.axis('off')
-                plt.tight_layout()
-                plt.savefig(f"{args.output_dir}/decoded_images_epoch_{epoch}.png")
-                plt.close(fig)
+                # for img, ax in zip(save_images, axes):
+                #     ax.imshow(img.permute(1, 2, 0).cpu().numpy())
+                #     ax.axis('off')
+                # plt.tight_layout()
+                # plt.savefig(f"{args.output_dir}/decoded_images_epoch_{epoch}.png")
+                # plt.close(fig)
 
                 # ------------------------------ END ADDED CODE ------------------------------ #
+                images = latents
+                print("Generated latents shape:", images.shape)
                 # denormalize the images and save to tensorboard
-                images_processed = ((images + 1) / 2 * 255).round().clamp(0, 255).to(torch.uint8).cpu().numpy()
+                images_processed = (images * 255).round().astype("uint8")
 
                 if args.logger == "tensorboard":
                     if is_accelerate_version(">=", "0.17.0.dev0"):
                         tracker = accelerator.get_tracker("tensorboard", unwrap=True)
                     else:
                         tracker = accelerator.get_tracker("tensorboard")
-                    tracker.add_images("test_samples", images_processed, epoch)
+                    tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
                 elif args.logger == "wandb":
                     # Upcoming `log_images` helper coming in https://github.com/huggingface/accelerate/pull/962/files
                     accelerator.get_tracker("wandb").log(
