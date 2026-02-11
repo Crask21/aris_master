@@ -103,6 +103,41 @@ class ResNetDataloader(dataloaderInterface):
             
         return data_dict
 
+                              
+# ----------------------- Generate synthetic data split ---------------------- #
+    def generate_synthetic_split(self):
+        """Generate a data dictionary from the config file. The data dictionary will contain the filepaths, labels and split for each image in the dataset.
+        arguments:
+            split: str: the split to generate the data dictionary for (train, val, test)
+        returns:        
+            data_dict: list: a list of dictionaries containing the filepaths, labels and split for each image in the dataset
+        """
+        
+        data_dict = []
+        for category, details in self.data_config["classes"].items():
+            data_dir = details["synthetic_data_dir"]  ## SYNTH
+            # Assert that the data_dir directory exists
+            assert Path(data_dir).exists(), f"data_dir directory does not exist. Please check the config file and the data_dir directory.\n   data_dir: {data_dir}\n  Config file: {self.config_path}"
+            all_sub_categories = details["sub_categories"] ## SYNTH?
+            
+            
+            for sub_category in all_sub_categories:
+                # Assert that the sub-category exists
+                if not Path(data_dir + "/" + sub_category).exists():
+                    logging.warning(f"Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
+                    continue
+                
+                # Find all .png files in the data_dir directory for the sub-category
+                sub_category_path = os.path.join(data_dir, sub_category)
+                # Look globally in the folder in recursive way for .png files
+                for root, dirs, files in os.walk(sub_category_path):
+                    for file in files:
+                        if file.endswith(".png"):
+                            
+                            image_file = os.path.join(root, file)
+                            sample = {"filepath": image_file, "class": category, "split": "train"} ## SYNTH
+                            data_dict.append(sample)  
+        return data_dict
 
 # ------------------------------ Get dataloader ------------------------------ #
     def get_dataloader(self, split="train"):

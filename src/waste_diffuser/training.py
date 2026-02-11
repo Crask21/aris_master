@@ -5,8 +5,10 @@ import shutil
 from diffusers.utils import is_tensorboard_available, logging
 from diffusers.training_utils import EMAModel
 from diffusers.optimization import get_scheduler
+from huggingface_hub import upload_folder
 import wandb
 from waste_diffuser.parse_args import parse_args
+from waste_diffuser.dataloader_interface import dataloaderInterface
 
 from accelerate.logging import get_logger
 from accelerate import Accelerator
@@ -19,7 +21,7 @@ import diffusers
 import datasets
 import logging
 
-from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
+from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline, DDPMPipeline
 from diffusers.schedulers import DDIMScheduler
 import inspect
 from tqdm.auto import tqdm
@@ -29,8 +31,8 @@ class training:
     def __init__(self):
         self.args = parse_args()
         
-        
-        self.dataloader = self.load_dataloader()
+        dl_interface = dataloaderInterface(self.args.config_path)
+        self.dataloader = dl_interface.dataloader
         print("Dataloader loaded successfully.")
         
         # self.display_batch(next(iter(self.dataloader)))
@@ -38,12 +40,14 @@ class training:
         #Initialize accelerator and logger
         self.initialize()
         #Initialize model
-        config = UNet2DModel.load_config(self.args.model_config_name_or_path)
-        model = UNet2DModel.from_config(config)
+        config = UNet2DModel.load_config(self.args.config_path)
+        config["model"]["num_class_embeds"] = dl_interface.num_classes
+        model = UNet2DModel.from_config(config["model"])
+        self.num_classes = config["model"]["num_class_embeds"]
         
         # Create EMA for the model.
         if self.args.use_ema:
-            ema_model = EMAModel(
+            self.ema_model = EMAModel(
                 model.parameters(),
                 decay=self.args.ema_max_decay,
                 use_ema_warmup=True,
@@ -68,13 +72,6 @@ class training:
             beta_schedule=self.args.ddpm_beta_schedule,
             prediction_type=self.args.prediction_type,
         )
-        # Initialize the learning rate scheduler
-        lr_scheduler = get_scheduler(
-            self.args.lr_scheduler,
-            optimizer=optimizer,
-            num_warmup_steps=self.args.lr_warmup_steps * self.args.gradient_accumulation_steps,
-            num_training_steps=(len(self.dataloader) * self.args.num_epochs),
-        )
         
         # Initialize the optimizer
         optimizer = torch.optim.AdamW(
@@ -83,6 +80,14 @@ class training:
             betas=(self.args.adam_beta1, self.args.adam_beta2),
             weight_decay=self.args.adam_weight_decay,
             eps=self.args.adam_epsilon,
+        )
+        
+        # Initialize the learning rate scheduler
+        lr_scheduler = get_scheduler(
+            self.args.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=self.args.lr_warmup_steps * self.args.gradient_accumulation_steps,
+            num_training_steps=(len(self.dataloader) * self.args.num_epochs),
         )
         # Prepare everything with `accelerator` and ema.
         self.model, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
@@ -100,45 +105,6 @@ class training:
         
         # ----------------------------------- TRAIN ---------------------------------- #
         self.train()
-        
-    
-    def load_dataloader(self):
-        
-        #Temp. Wait for Andreas' code:
-        from torchvision import transforms
-        # Preprocessing the datasets and DataLoaders creation.
-        spatial_augmentations = [
-            transforms.Resize(self.args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.args.resolution) if self.args.center_crop else transforms.RandomCrop(self.args.resolution),
-            transforms.RandomHorizontalFlip() if self.args.random_flip else transforms.Lambda(lambda x: x),
-        ]
-
-        augmentations = transforms.Compose(
-            spatial_augmentations
-            + [
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
-
-        def transform_images(examples):
-            processed = []
-            for image in examples["image"]:
-                processed.append(augmentations(image.convert("RGB")))
-            if "class" in examples:
-                return {"image": processed, "class": examples["class"]}
-            else:
-                return {"image": processed}
-        from datasets import load_dataset
-        dataset = load_dataset("imagefolder", data_dir=self.args.train_data_dir, split="train")
-        dataset.set_transform(transform_images)
-        train_dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=self.args.train_batch_size, shuffle=True, num_workers=self.args.dataloader_num_workers
-        )
-        
-        #FUTURE ANDREAS CODE:
-        # data_loader = dataloader(config = config_path, output_dir=output_dir, resolution=128, center_crop=True, random_flip=True)
-        return train_dataloader
     
     def initialize(self):
         '''
@@ -183,8 +149,8 @@ class training:
         '''
         # Set training state
         total_batch_size = self.args.train_batch_size * self.accelerator.num_processes * self.args.gradient_accumulation_steps
-        num_update_steps_per_epoch = math.ceil(len(self.train_dataloader) / self.args.gradient_accumulation_steps)
-        max_train_steps = self.args.num_epochs * num_update_steps_per_epoch
+        self.num_update_steps_per_epoch = math.ceil(len(self.train_dataloader) / self.args.gradient_accumulation_steps)
+        max_train_steps = self.args.num_epochs * self.num_update_steps_per_epoch
 
         self.logger.info("***** Running training *****")
         self.logger.info(f"  Num examples = {len(self.train_dataloader.dataset)}")
@@ -217,8 +183,8 @@ class training:
                 self.global_step = int(path.split("-")[1])
 
                 self.resume_global_step = self.global_step * self.args.gradient_accumulation_steps
-                self.first_epoch = self.global_step // num_update_steps_per_epoch
-                self.resume_step = self.resume_global_step % (num_update_steps_per_epoch * self.args.gradient_accumulation_steps)
+                self.first_epoch = self.global_step // self.num_update_steps_per_epoch
+                self.resume_step = self.resume_global_step % (self.num_update_steps_per_epoch * self.args.gradient_accumulation_steps)
                            
     def initialize_model(self, model_name_or_path, model_function):
         '''
@@ -254,19 +220,19 @@ class training:
         for epoch in range(self.first_epoch, self.args.num_epochs):
             
             self.model.train()
-            progress_bar = tqdm(total=self.num_update_steps_per_epoch)
-            progress_bar.set_description(f"Epoch {epoch}")
+            self.progress_bar = tqdm(total=self.num_update_steps_per_epoch)
+            self.progress_bar.set_description(f"Epoch {epoch}")
             for step, batch in enumerate(self.train_dataloader):
                 # Skip steps until we reach the resumed step
                 if self.args.resume_from_checkpoint and epoch == self.first_epoch and step < self.resume_step:
                     if step % self.args.gradient_accumulation_steps == 0:
-                        progress_bar.update(1)
+                        self.progress_bar.update(1)
                     continue
                 
                 
-                class_labels = batch["class"].to(self.accelerator.device)
-                clean_images = batch["input"].to(self.accelerator.device)
-                
+                class_labels = batch["class"]
+                class_labels = class_labels.to(self.accelerator.device)
+                clean_images = batch["image"].to(self.accelerator.device)
                 # Sample noise that we'll add to the images
                 noise = torch.randn(clean_images.shape, dtype=self.weight_dtype, device=clean_images.device)
                 bsz = clean_images.shape[0]
@@ -279,6 +245,8 @@ class training:
                 # Add noise to the clean images according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_images = self.noise_scheduler.add_noise(clean_images, noise, timesteps)
+            
+                
                 
                 # ----------------------------- model predictions ---------------------------- #
                 with self.accelerator.accumulate(self.model):
@@ -310,19 +278,35 @@ class training:
             self.progress_bar.close()
             
             # --------------- Generate sample images for visual inspection --------------- #
-            unet = self.accelerator.unwrap_model(self.model)
-            images_processed = self.inference(unet,
-                                              scheduler=self.noise_scheduler,
-                                              )
+            if epoch % self.args.save_images_epochs == 0 or epoch == self.args.num_epochs - 1:
+                unet = self.accelerator.unwrap_model(self.model)
+                images_processed = self.inference(unet,
+                                                scheduler=self.noise_scheduler,
+                                                )
 
-            tracker = self.accelerator.get_tracker("tensorboard", unwrap=True)
-            tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+                tracker = self.accelerator.get_tracker("tensorboard", unwrap=True)
+                tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+            
+            if epoch % self.args.save_model_epochs == 0 or epoch == self.args.num_epochs - 1:
+                # save the model
+                unet = self.accelerator.unwrap_model(self.model)
+
+                if self.args.use_ema:
+                    self.ema_model.store(unet.parameters())
+                    self.ema_model.copy_to(unet.parameters())
+
+                pipeline = DDIMPipeline(
+                    unet=unet,
+                    scheduler=self.noise_scheduler,
+                )
+
+                pipeline.save_pretrained(self.args.output_dir)
+
+                if self.args.use_ema:
+                    self.ema_model.restore(unet.parameters())
             
             
-            
-            self.accelerator.end_training()
-            
-            
+            self.accelerator.end_training()    
                 
     def save_checkpoint(self, loss):
         # Checks if the accelerator has performed an optimization step behind the scenes
@@ -362,9 +346,7 @@ class training:
         self.progress_bar.set_postfix(**logs)
         self.accelerator.log(logs, step=self.global_step)
         
-
-    
-    def inference(self, unet, scheduler=None, class_conditional=False):
+    def inference(self, unet, scheduler=None, vae=None):
         
         if self.args.use_ema:
             self.ema_model.store(unet.parameters())
@@ -378,19 +360,9 @@ class training:
         # run pipeline in inference (sample random noise and denoise)
         # Get latents from pipeline
 
-        if class_conditional:
-            print("Running inference with class conditioning.")
-            # Create class labels for evaluation.
-            num_classes = self.
-            
-            num_class_0 = self.args.eval_batch_size // 2
-            num_class_1 = self.args.eval_batch_size - num_class_0
-            class_labels = torch.cat([
-                torch.zeros(num_class_0, dtype=torch.long),
-                torch.ones(num_class_1, dtype=torch.long)
-            ]).to(self.accelerator.device)
-        else:
-            print("Running inference without class conditioning.")
+        print("Running inference with class conditioning.")
+        # Create class labels for evaluation.
+        class_labels = torch.from_numpy(np.linspace(0, self.num_classes - 1, self.args.eval_batch_size, dtype=int)).to(self.accelerator.device)
         
         latents = pipeline(
             generator=generator,
@@ -403,43 +375,11 @@ class training:
 
         if self.args.use_ema:
             self.ema_model.restore(unet.parameters())
-        # # -------------------------------- ADDED CODE -------------------------------- #
-        # print("Latents shape:", latents.shape)
-        # # decode the latents with VAE in smaller batches to avoid OOM
-        # decoded_images = []
-        # vae_batch_size = 4  # Process 4 images at a time
-        # with torch.no_grad():
-        #     for i in range(0, len(latents), vae_batch_size):
-        #         batch = latents[i:i+vae_batch_size] / vae.config.scaling_factor
-                
-        #         if not isinstance(batch, torch.Tensor):
-        #             batch = torch.from_numpy(batch)
-        #         batch = batch.permute(0, 3, 1, 2).contiguous()
-        #         print("batch shape:", batch.shape)
-        #         decoded_batch = vae.decode(batch.to(vae.device), return_dict=False)[0]
-        #         decoded_images.append(decoded_batch.cpu())
-        #         del batch, decoded_batch
-        #         torch.cuda.empty_cache()
-        # images = torch.cat(decoded_images, dim=0)
-        # print("Final decoded images shape:", images.shape)
-
-        # #Save decoded images
-        # save_images = (images + 1) / 2  # Scale to [0, 1]
-        # grid_size = int(np.ceil(np.sqrt(args.eval_batch_size)))
-        # fig, axes = plt.subplots(grid_size, grid_size, figsize=(10, 10))
-        # axes = axes.flatten()
-
-        # for img, ax in zip(save_images, axes):
-        #     ax.imshow(img.permute(1, 2, 0).cpu().numpy())
-        #     ax.axis('off')
-        # plt.tight_layout()
-        # plt.savefig(f"{args.output_dir}/decoded_images_epoch_{epoch}.png")
-        # plt.close(fig)
-
-        # ------------------------------ END ADDED CODE ------------------------------ #
+            
         images = latents
-        print("Generated latents shape:", images.shape)
-        # denormalize the images and save to tensorboard
+        self.logger.info(f"Generated latents shape: {images.shape}")
+        
+        # denormalize the images
         images_processed = (images * 255).round().astype("uint8")
         return images_processed
     

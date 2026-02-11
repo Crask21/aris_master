@@ -8,6 +8,7 @@ def parse_args():
     --dataset_name
     --dataset_config_name
     --model_config_name_or_path
+    --config_path
     --train_data_dir
     --output_dir
     --overwrite_output_dir
@@ -69,6 +70,15 @@ def parse_args():
         type=str,
         default=None,
         help="The config of the UNet model to train, leave as None to use standard DDPM configuration.",
+    )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        default=None,
+        help=(
+            "Path to a JSON file containing the training configuration. If specified, all other training arguments"
+            " will be overridden by the values specified in this file."
+        ),
     )
     parser.add_argument(
         "--train_data_dir",

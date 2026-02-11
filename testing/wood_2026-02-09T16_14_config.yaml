@@ -1,0 +1,149 @@
+augmentations:
+  affine:
+    interpolation: 2
+    p: 0.0
+    rotate:
+      max: 45
+      min: -45
+    scale:
+      max: 1.2
+      min: 0.8
+    shear:
+      max: 10
+      min: -10
+    translate_percent:
+      max: 0.15
+      min: -0.15
+  brightness_contrast:
+    brightness_limit:
+      max: 0.2
+      min: -0.2
+    contrast_limit:
+      max: 0.2
+      min: -0.2
+    p: 0.0
+  clahe:
+    clip_limit: 2.0
+    p: 0.0
+  coarse_dropout:
+    max_height: 32
+    max_width: 32
+    num_holes:
+      max: 8
+      min: 1
+    p: 0.0
+  color_jitter:
+    brightness:
+      max: 1.2
+      min: 0.8
+    contrast:
+      max: 1.2
+      min: 0.8
+    hue: 0
+    p: 0.0
+    saturation:
+      max: 1.2
+      min: 0.8
+  defocus:
+    alias_blur:
+      max: 0.5
+      min: 0.1
+    p: 0.0
+    radius:
+      max: 5
+      min: 1
+  gauss_noise:
+    mean_range:
+      max: 0.1
+      min: -0.1
+    p: 0.0
+    std_range:
+      max: 0.1
+      min: 0.01
+  horizontal_flip:
+    p: 0.0
+  iso_noise:
+    color_shift:
+      max: 0.05
+      min: 0.01
+    intensity:
+      max: 0.5
+      min: 0.1
+    p: 0.0
+  random_resized_crop:
+    height: 400
+    p: 0.0
+    ratio:
+      max: 1.1
+      min: 0.9
+    scale:
+      max: 1.0
+      min: 0.08
+    width: 600
+  random_rotate_90:
+    p: 0.0
+  random_shadow:
+    num_shadows_limit:
+      max: 2
+      min: 1
+    p: 0.0
+    shadow_dimension: 5
+  resize:
+    height: 1200
+    interpolation: 0
+    p: 0.0
+    width: 1920
+  vertical_flip:
+    p: 0.0
+evaluation:
+  ckpt_path: /home/simon/Desktop/classification/data/checkpoints/2026-02-09T16-45-51/model_resnet18_2.2.2_wood0.0.1_epoch=18_val_loss=0.27_val_acc=0.94.ckpt
+  fraction_dictionary: ./classification/utils/fraction_dictionary.yaml
+  inference_record: /home/simon/Desktop/classification/data/configs/wood/2026-02-09T16_14/predictions.csv
+  output_dir: /home/simon/Desktop/classification/data/configs/wood/2026-02-09T16_14
+  report_template_path: ./classification/classification/utils/template_classification_report.md
+logging:
+  checkpoint_dir: ./data/checkpoints/
+  logger: tensorboard
+  tag: wood
+  version: 0.0.1
+model:
+  broad_class_names: []
+  class_imbalance:
+  - 0.15166371943144807
+  - 0.15649464095663101
+  - 0.6918416396119209
+  cls_names:
+  - impregnated_wood
+  - normal_wood
+  - wood_wool_board
+  data_file:
+  dropout: 0.1
+  model_path: null
+  n_frozen_layers: 5
+  name: resnet18
+  pretrained: true
+  specific_to_broad_class_mappings: []
+  thresholds: []
+system:
+  device: cuda
+  n_cpu_workers: 10
+  precision: high
+  seed: 42
+  verbose: null
+techniques:
+  tta:
+    enabled: false
+train:
+  batch_size: 16
+  dropout: 0.1
+  grad_clip_alg: norm
+  grad_clip_val: 0.1
+  label_smoothing: 0.01
+  learning_rate: 0.0003
+  log_every_n_step: 5
+  monitor_metric: val_loss
+  num_epochs: 100
+  patience: 15
+  sweep_file: /home/simon/Desktop/classification/data/sweep/sweep-config_2025-12-30.json
+  val_check_interval: 0.5
+  weight_decay: 0.001

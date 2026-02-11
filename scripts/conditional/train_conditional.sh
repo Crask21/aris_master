@@ -21,7 +21,7 @@ SESSION_NAME="07-02_2-class-conditioning-wood-plastic_128"
 accelerate launch train_conditional.py \
   --output_dir="${TRAINING_DIR}${SESSION_NAME}" \
   --train_data_dir="$DATASET_DIR/wood/4_main_categories_512x512/train/impregnated_wood/" \
-  --train_data_dir2="/media/aris/Data/master2025dev/datasets/plastic/all_plastic_categories/hard_plastic"\
+  --train_data_dir2="$DATASET_DIR/plastic/train/hard_plastic"\
   --resolution=128 --center_crop --random_flip \
   --train_batch_size=32 \
   --num_epochs=1000 \
@@ -29,7 +29,6 @@ accelerate launch train_conditional.py \
   --use_ema \
   --learning_rate=1e-4 \
   --lr_warmup_steps=500 \
-  --mixed_precision=no \
   --checkpointing_steps=5000 \
   --comment="Conditional training with two datasets" \
   --resume_from_checkpoint="latest"
