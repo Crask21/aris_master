@@ -1,0 +1,482 @@
+
+from datetime import timedelta
+import math
+import shutil
+from diffusers.utils import is_tensorboard_available, logging
+from diffusers.training_utils import EMAModel
+from diffusers.optimization import get_scheduler
+import wandb
+from waste_diffuser.parse_args import parse_args
+
+from accelerate.logging import get_logger
+from accelerate import Accelerator
+from accelerate.utils import ProjectConfiguration, InitProcessGroupKwargs
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import diffusers
+import datasets
+import logging
+
+from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
+from diffusers.schedulers import DDIMScheduler
+import inspect
+from tqdm.auto import tqdm
+import torch.nn.functional as F
+
+class training:
+    def __init__(self):
+        self.args = parse_args()
+        
+        
+        self.dataloader = self.load_dataloader()
+        print("Dataloader loaded successfully.")
+        
+        # self.display_batch(next(iter(self.dataloader)))
+        
+        #Initialize accelerator and logger
+        self.initialize()
+        #Initialize model
+        config = UNet2DModel.load_config(self.args.model_config_name_or_path)
+        model = UNet2DModel.from_config(config)
+        
+        # Create EMA for the model.
+        if self.args.use_ema:
+            ema_model = EMAModel(
+                model.parameters(),
+                decay=self.args.ema_max_decay,
+                use_ema_warmup=True,
+                inv_gamma=self.args.ema_inv_gamma,
+                power=self.args.ema_power,
+                model_cls=UNet2DModel,
+                model_config=model.config,
+            )
+            
+        #Mixed precision.
+        self.weight_dtype = torch.float32
+        if self.accelerator.mixed_precision == "fp16":
+            self.weight_dtype = torch.float16
+            self.args.mixed_precision = self.accelerator.mixed_precision
+        elif self.accelerator.mixed_precision == "bf16":
+            self.weight_dtype = torch.bfloat16
+            self.args.mixed_precision = self.accelerator.mixed_precision
+            
+        # Initialize the scheduler
+        self.noise_scheduler = DDIMScheduler(
+            num_train_timesteps=self.args.ddpm_num_steps,
+            beta_schedule=self.args.ddpm_beta_schedule,
+            prediction_type=self.args.prediction_type,
+        )
+        # Initialize the learning rate scheduler
+        lr_scheduler = get_scheduler(
+            self.args.lr_scheduler,
+            optimizer=optimizer,
+            num_warmup_steps=self.args.lr_warmup_steps * self.args.gradient_accumulation_steps,
+            num_training_steps=(len(self.dataloader) * self.args.num_epochs),
+        )
+        
+        # Initialize the optimizer
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=self.args.learning_rate,
+            betas=(self.args.adam_beta1, self.args.adam_beta2),
+            weight_decay=self.args.adam_weight_decay,
+            eps=self.args.adam_epsilon,
+        )
+        # Prepare everything with `accelerator` and ema.
+        self.model, self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            model, optimizer, self.dataloader, lr_scheduler
+        )
+        if self.args.use_ema:
+            self.ema_model.to(self.accelerator.device)
+            
+        if self.accelerator.is_main_process:
+            run = os.path.split(__file__)[-1].split(".")[0]
+            self.accelerator.init_trackers(run)
+        
+        # Load checkpoint if specified
+        self.load_checkpoint()
+        
+        # ----------------------------------- TRAIN ---------------------------------- #
+        self.train()
+        
+    
+    def load_dataloader(self):
+        
+        #Temp. Wait for Andreas' code:
+        from torchvision import transforms
+        # Preprocessing the datasets and DataLoaders creation.
+        spatial_augmentations = [
+            transforms.Resize(self.args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(self.args.resolution) if self.args.center_crop else transforms.RandomCrop(self.args.resolution),
+            transforms.RandomHorizontalFlip() if self.args.random_flip else transforms.Lambda(lambda x: x),
+        ]
+
+        augmentations = transforms.Compose(
+            spatial_augmentations
+            + [
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+
+        def transform_images(examples):
+            processed = []
+            for image in examples["image"]:
+                processed.append(augmentations(image.convert("RGB")))
+            if "class" in examples:
+                return {"image": processed, "class": examples["class"]}
+            else:
+                return {"image": processed}
+        from datasets import load_dataset
+        dataset = load_dataset("imagefolder", data_dir=self.args.train_data_dir, split="train")
+        dataset.set_transform(transform_images)
+        train_dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=self.args.train_batch_size, shuffle=True, num_workers=self.args.dataloader_num_workers
+        )
+        
+        #FUTURE ANDREAS CODE:
+        # data_loader = dataloader(config = config_path, output_dir=output_dir, resolution=128, center_crop=True, random_flip=True)
+        return train_dataloader
+    
+    def initialize(self):
+        '''
+        Intialize the accelerator and logger
+        '''
+        self.logger = get_logger(__name__, log_level="INFO")
+        
+        logging_dir = os.path.join(self.args.output_dir, self.args.logging_dir)
+        accelerator_project_config = ProjectConfiguration(project_dir=self.args.output_dir, logging_dir=logging_dir)
+
+        kwargs = InitProcessGroupKwargs(timeout=timedelta(seconds=7200))  # a big number for high resolution or big dataset
+        self.accelerator = Accelerator(
+            gradient_accumulation_steps=self.args.gradient_accumulation_steps,
+            mixed_precision=self.args.mixed_precision,
+            log_with=self.args.logger,
+            project_config=accelerator_project_config,
+            kwargs_handlers=[kwargs],
+        )
+        if self.args.logger == "tensorboard":
+            if not is_tensorboard_available():
+                raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
+
+        # Make one log on every process with the configuration for debugging.
+        logging.basicConfig(
+            format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+            datefmt="%m/%d/%Y %H:%M:%S",
+            level=logging.INFO,
+        )
+        self.logger.info(self.accelerator.state, main_process_only=False)
+        
+        # Set the verbosity level 
+        datasets.utils.logging.set_verbosity_warning()
+        diffusers.utils.logging.set_verbosity_info()
+        
+        # Create output dir
+        if self.args.output_dir is not None:
+            os.makedirs(self.args.output_dir, exist_ok=True)
+    
+    def load_checkpoint(self):
+        '''
+        Storage function for loading a checkpoint if specified in the arguments.
+        '''
+        # Set training state
+        total_batch_size = self.args.train_batch_size * self.accelerator.num_processes * self.args.gradient_accumulation_steps
+        num_update_steps_per_epoch = math.ceil(len(self.train_dataloader) / self.args.gradient_accumulation_steps)
+        max_train_steps = self.args.num_epochs * num_update_steps_per_epoch
+
+        self.logger.info("***** Running training *****")
+        self.logger.info(f"  Num examples = {len(self.train_dataloader.dataset)}")
+        self.logger.info(f"  Num Epochs = {self.args.num_epochs}")
+        self.logger.info(f"  Instantaneous batch size per device = {self.args.train_batch_size}")
+        self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+        self.logger.info(f"  Gradient Accumulation steps = {self.args.gradient_accumulation_steps}")
+        self.logger.info(f"  Total optimization steps = {max_train_steps}")
+
+        self.global_step = 0
+        self.first_epoch = 0
+        #Load checkpoint
+        if self.args.resume_from_checkpoint:
+            if self.args.resume_from_checkpoint != "latest":
+                path = os.path.basename(self.args.resume_from_checkpoint)
+            else:
+                # Get the most recent checkpoint
+                dirs = os.listdir(self.args.output_dir)
+                dirs = [d for d in dirs if d.startswith("checkpoint")]
+                dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+                path = dirs[-1] if len(dirs) > 0 else None
+            if path is None:
+                self.accelerator.print(
+                    f"Checkpoint '{self.args.resume_from_checkpoint}' does not exist. Starting a new training run."
+                )
+                self.args.resume_from_checkpoint = None
+            else:
+                self.accelerator.print(f"Resuming from checkpoint {path}")
+                self.accelerator.load_state(os.path.join(self.args.output_dir, path))
+                self.global_step = int(path.split("-")[1])
+
+                self.resume_global_step = self.global_step * self.args.gradient_accumulation_steps
+                self.first_epoch = self.global_step // num_update_steps_per_epoch
+                self.resume_step = self.resume_global_step % (num_update_steps_per_epoch * self.args.gradient_accumulation_steps)
+                           
+    def initialize_model(self, model_name_or_path, model_function):
+        '''
+        Initialize the model and move it to the accelerator device.
+        --model_name_or_path: The name or path of the model to initialize.
+        --model_function: The function to use for initializing the model (e.g., UNet2DModel.from_pretrained).
+        '''
+        config = UNet2DModel.load_config(self.args.model_config_name_or_path)
+        model = UNet2DModel.from_config(config)
+        
+        model = model_function(model_name_or_path)
+        return model.to(self.accelerator.device)       
+    
+    def _extract_into_tensor(self, arr, timesteps, broadcast_shape):
+        """
+        Extract values from a 1-D numpy array for a batch of indices.
+
+        :param arr: the 1-D numpy array.
+        :param timesteps: a tensor of indices into the array to extract.
+        :param broadcast_shape: a larger shape of K dimensions with the batch
+                                dimension equal to the length of timesteps.
+        :return: a tensor of shape [batch_size, 1, ...] where the shape has K dims.
+        """
+        if not isinstance(arr, torch.Tensor):
+            arr = torch.from_numpy(arr)
+        res = arr[timesteps].float().to(timesteps.device)
+        while len(res.shape) < len(broadcast_shape):
+            res = res[..., None]
+        return res.expand(broadcast_shape)
+    
+    def train(self):
+        
+        for epoch in range(self.first_epoch, self.args.num_epochs):
+            
+            self.model.train()
+            progress_bar = tqdm(total=self.num_update_steps_per_epoch)
+            progress_bar.set_description(f"Epoch {epoch}")
+            for step, batch in enumerate(self.train_dataloader):
+                # Skip steps until we reach the resumed step
+                if self.args.resume_from_checkpoint and epoch == self.first_epoch and step < self.resume_step:
+                    if step % self.args.gradient_accumulation_steps == 0:
+                        progress_bar.update(1)
+                    continue
+                
+                
+                class_labels = batch["class"].to(self.accelerator.device)
+                clean_images = batch["input"].to(self.accelerator.device)
+                
+                # Sample noise that we'll add to the images
+                noise = torch.randn(clean_images.shape, dtype=self.weight_dtype, device=clean_images.device)
+                bsz = clean_images.shape[0]
+                
+                # Sample a random timestep for each image
+                timesteps = torch.randint(
+                    0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=clean_images.device
+                ).long()
+                
+                # Add noise to the clean images according to the noise magnitude at each timestep
+                # (this is the forward diffusion process)
+                noisy_images = self.noise_scheduler.add_noise(clean_images, noise, timesteps)
+                
+                # ----------------------------- model predictions ---------------------------- #
+                with self.accelerator.accumulate(self.model):
+                    # Predict the noise residual
+                    model_output = self.model(noisy_images, timesteps, class_labels=class_labels).sample
+
+                    if self.args.prediction_type == "epsilon":
+                        loss = F.mse_loss(model_output.float(), noise.float())  # this could have different weights!
+                    elif self.args.prediction_type == "sample":
+                        alpha_t = self._extract_into_tensor(
+                            self.noise_scheduler.alphas_cumprod, timesteps, (clean_images.shape[0], 1, 1, 1)
+                        )
+                        snr_weights = alpha_t / (1 - alpha_t)
+                        # use SNR weighting from distillation paper
+                        loss = snr_weights * F.mse_loss(model_output.float(), clean_images.float(), reduction="none")
+                        loss = loss.mean()
+                    else:
+                        raise ValueError(f"Unsupported prediction type: {self.args.prediction_type}")
+                    
+                    self.accelerator.backward(loss)
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
+                    
+                # ------------------------------ SAVE CHECKPOINT ----------------------------- #
+                self.save_checkpoint(loss)
+            self.progress_bar.close()
+            
+            # --------------- Generate sample images for visual inspection --------------- #
+            unet = self.accelerator.unwrap_model(self.model)
+            images_processed = self.inference(unet,
+                                              scheduler=self.noise_scheduler,
+                                              )
+
+            tracker = self.accelerator.get_tracker("tensorboard", unwrap=True)
+            tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+            
+            
+            
+            self.accelerator.end_training()
+            
+            
+                
+    def save_checkpoint(self, loss):
+        # Checks if the accelerator has performed an optimization step behind the scenes
+        if self.accelerator.sync_gradients:
+            if self.args.use_ema:
+                self.ema_model.step(self.model.parameters())
+            self.progress_bar.update(1)
+            self.global_step += 1
+            if self.global_step % self.args.checkpointing_steps == 0:
+                # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+                if self.args.checkpoints_total_limit is not None:
+                    checkpoints = os.listdir(self.args.output_dir)
+                    checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                    checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+
+                    # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                    if len(checkpoints) >= self.args.checkpoints_total_limit:
+                        num_to_remove = len(checkpoints) - self.args.checkpoints_total_limit + 1
+                        removing_checkpoints = checkpoints[0:num_to_remove]
+
+                        self.logger.info(
+                            f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                        )
+                        self.logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+
+                        for removing_checkpoint in removing_checkpoints:
+                            removing_checkpoint = os.path.join(self.args.output_dir, removing_checkpoint)
+                            shutil.rmtree(removing_checkpoint)
+
+                save_path = os.path.join(self.args.output_dir, f"checkpoint-{self.global_step}")
+                self.accelerator.save_state(save_path)
+                self.logger.info(f"Saved state to {save_path}")
+
+        logs = {"loss": loss.detach().item(), "lr": self.lr_scheduler.get_last_lr()[0], "step": self.global_step}
+        if self.args.use_ema:
+            logs["ema_decay"] = self.ema_model.cur_decay_value
+        self.progress_bar.set_postfix(**logs)
+        self.accelerator.log(logs, step=self.global_step)
+        
+
+    
+    def inference(self, unet, scheduler=None, class_conditional=False):
+        
+        if self.args.use_ema:
+            self.ema_model.store(unet.parameters())
+            self.ema_model.copy_to(unet.parameters())
+
+        pipeline = DDIMPipeline(
+            unet=unet,
+            scheduler=scheduler,
+        )
+        generator = torch.Generator(device=pipeline.device).manual_seed(0)
+        # run pipeline in inference (sample random noise and denoise)
+        # Get latents from pipeline
+
+        if class_conditional:
+            print("Running inference with class conditioning.")
+            # Create class labels for evaluation.
+            num_classes = self.
+            
+            num_class_0 = self.args.eval_batch_size // 2
+            num_class_1 = self.args.eval_batch_size - num_class_0
+            class_labels = torch.cat([
+                torch.zeros(num_class_0, dtype=torch.long),
+                torch.ones(num_class_1, dtype=torch.long)
+            ]).to(self.accelerator.device)
+        else:
+            print("Running inference without class conditioning.")
+        
+        latents = pipeline(
+            generator=generator,
+            batch_size=self.args.eval_batch_size,
+            num_inference_steps=self.args.ddpm_num_inference_steps,
+            output_type="latent",
+            class_labels=class_labels,
+            return_dict=False
+        )[0]
+
+        if self.args.use_ema:
+            self.ema_model.restore(unet.parameters())
+        # # -------------------------------- ADDED CODE -------------------------------- #
+        # print("Latents shape:", latents.shape)
+        # # decode the latents with VAE in smaller batches to avoid OOM
+        # decoded_images = []
+        # vae_batch_size = 4  # Process 4 images at a time
+        # with torch.no_grad():
+        #     for i in range(0, len(latents), vae_batch_size):
+        #         batch = latents[i:i+vae_batch_size] / vae.config.scaling_factor
+                
+        #         if not isinstance(batch, torch.Tensor):
+        #             batch = torch.from_numpy(batch)
+        #         batch = batch.permute(0, 3, 1, 2).contiguous()
+        #         print("batch shape:", batch.shape)
+        #         decoded_batch = vae.decode(batch.to(vae.device), return_dict=False)[0]
+        #         decoded_images.append(decoded_batch.cpu())
+        #         del batch, decoded_batch
+        #         torch.cuda.empty_cache()
+        # images = torch.cat(decoded_images, dim=0)
+        # print("Final decoded images shape:", images.shape)
+
+        # #Save decoded images
+        # save_images = (images + 1) / 2  # Scale to [0, 1]
+        # grid_size = int(np.ceil(np.sqrt(args.eval_batch_size)))
+        # fig, axes = plt.subplots(grid_size, grid_size, figsize=(10, 10))
+        # axes = axes.flatten()
+
+        # for img, ax in zip(save_images, axes):
+        #     ax.imshow(img.permute(1, 2, 0).cpu().numpy())
+        #     ax.axis('off')
+        # plt.tight_layout()
+        # plt.savefig(f"{args.output_dir}/decoded_images_epoch_{epoch}.png")
+        # plt.close(fig)
+
+        # ------------------------------ END ADDED CODE ------------------------------ #
+        images = latents
+        print("Generated latents shape:", images.shape)
+        # denormalize the images and save to tensorboard
+        images_processed = (images * 255).round().astype("uint8")
+        return images_processed
+    
+    def display_batch(self, batch, num_images=9):
+        '''
+        Function for displaying a batch of images from the dataloader.
+        --batch: A batch of images from the dataloader.
+        --num_images: The number of images to display from the batch.
+        '''
+        #DONE
+        images = batch["image"]
+        
+        # Denormalize images from [-1, 1] to [0, 1]
+        images = (images + 1) / 2
+        images = torch.clamp(images, 0, 1)
+        # Create grid
+        grid_size = int(np.ceil(np.sqrt(num_images)))
+        fig, axes = plt.subplots(grid_size, grid_size, figsize=(10, 10))
+        axes = axes.flatten()
+        
+        for idx, ax in enumerate(axes):
+            if idx < len(images):
+                # Convert to numpy and transpose from CxHxW to HxWxC
+                img = images[idx].permute(1, 2, 0).numpy()
+                ax.imshow(img)
+                ax.axis('off')
+            else:
+                ax.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+        
+        
+        
+    
+
+
+if __name__ == "__main__":
+    trainer = training()
+        
