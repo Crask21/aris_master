@@ -25,7 +25,8 @@ class dataloaderInterface:
                  random_flip: bool = None, 
                  preview: bool = True, 
                  batch_size: int = None, 
-                 num_workers: int = None):
+                 num_workers: int = None,
+                 synthetic: bool = False):
         
         self.config_path = config
         self.output_dir = output_dir
@@ -35,7 +36,8 @@ class dataloaderInterface:
         self.preview = preview
         self.batch_size = batch_size
         self.num_workers = num_workers
-        
+        self.synthetic = synthetic
+                
         # Initialize config as json object
         with open(config, 'r') as f:            
             config = json.load(f)
@@ -168,6 +170,7 @@ class dataloaderInterface:
         self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
         if self.preview == True:
             self.preview_dataloader(self.dataloader)
+            self.print_dataset_summary(data_dict)
         return self.dataloader
         
         
@@ -217,6 +220,118 @@ class dataloaderInterface:
         plt.savefig(output_path)
         print(f"[INFO] Dataloader preview saved to {output_path}")
         plt.show()
+
+
+# ------------------------- Dataset summary function ------------------------- #
+    def print_dataset_summary(self, data_dict):
+        """Print a formatted summary of the dataset with split and class distributions.
+        
+        Arguments:
+            data_dict: list of dictionaries containing 'filepath', 'class', and 'split' keys
+        """
+        from collections import Counter
+        
+        # Count splits (map 'synth' to 'train' for main split table)
+        split_counts = Counter()
+        for item in data_dict:
+            split = item['split']
+            if split == 'synth':
+                split_counts['train'] += 1
+            else:
+                split_counts[split] += 1
+        
+        # Map 'val' to 'validation' for display
+        display_split_counts = {}
+        for split, count in split_counts.items():
+            display_name = 'validation' if split == 'val' else split
+            display_split_counts[display_name] = count
+        
+        total_images = sum(display_split_counts.values())
+        
+        print("### Dataset summary:\n")
+        
+        # Split distribution table
+        print("| Split | Count | Share of overall |")
+        print("|-------|-------|------------------|")
+        for split in sorted(display_split_counts.keys()):
+            count = display_split_counts[split]
+            percentage = (count / total_images) * 100
+            print(f"| {split:<20} | {count:<20} | {percentage:.2f}%{' ' * 14} |")
+        print(f"| {'TOTAL':<20} | {total_images:<20} | {100.00:.2f}%{' ' * 14} |")
+        print()
+        
+        # Class distribution per split
+        class_split_counts = {}
+        for item in data_dict:
+            cls = item['class']
+            split = item['split']
+            # Map synth to train for this table
+            if split == 'synth':
+                split = 'train'
+            elif split == 'val':
+                split = 'validation'
+            
+            if cls not in class_split_counts:
+                class_split_counts[cls] = {}
+            if split not in class_split_counts[cls]:
+                class_split_counts[cls][split] = 0
+            class_split_counts[cls][split] += 1
+        
+        print("| Class             | Count (train) | Share of train | Count (validation) | Share of validation |")
+        print("|------------------|---------------|----------------|--------------------|----------------------|")
+        
+        train_total = display_split_counts.get('train', 0)
+        val_total = display_split_counts.get('validation', 0)
+        
+        for cls in sorted(class_split_counts.keys()):
+            train_count = class_split_counts[cls].get('train', 0)
+            val_count = class_split_counts[cls].get('validation', 0)
+            train_pct = (train_count / train_total * 100) if train_total > 0 else 0
+            val_pct = (val_count / val_total * 100) if val_total > 0 else 0
+            
+            print(f"| {cls:<20} | {train_count:<20} | {train_pct:.2f}%{' ' * 14} | {val_count:<20} | {val_pct:.2f}%{' ' * 14} |")
+        
+        print(f"| {'TOTAL':<20} | {train_total:<20} | {100.00:.2f}%{' ' * 14} | {val_total:<20} | {100.00:.2f}%{' ' * 14} |")
+        print()
+        
+        # Real vs. synthetic training split
+        print("#### Real vs. synthetic training split:\n")
+        print()
+        print()
+        print("| Class             | Count (train, real) | Share of train (real) | Count (train, synthetic) | Share of train (synthetic) |")
+        print("|------------------|---------------------|-----------------------|--------------------------|----------------------------|")
+        
+        real_synth_counts = {}
+        for item in data_dict:
+            if item['split'] in ['train', 'synth']:
+                cls = item['class']
+                split_type = 'real' if item['split'] == 'train' else 'synthetic'
+                
+                if cls not in real_synth_counts:
+                    real_synth_counts[cls] = {'real': 0, 'synthetic': 0}
+                real_synth_counts[cls][split_type] += 1
+        
+        total_real = 0
+        total_synthetic = 0
+        
+        for cls in sorted(real_synth_counts.keys()):
+            real_count = real_synth_counts[cls]['real']
+            synth_count = real_synth_counts[cls]['synthetic']
+            total_real += real_count
+            total_synthetic += synth_count
+            
+            class_total = real_count + synth_count
+            real_pct = (real_count / class_total * 100) if class_total > 0 else 0
+            synth_pct = (synth_count / class_total * 100) if class_total > 0 else 0
+            
+            print(f"| {cls:<20} | {real_count:<20} | {real_pct:.2f}%{' ' * 14} | {synth_count:<24} | {synth_pct:.2f}%{' ' * 14} |")
+        
+        train_total_all = total_real + total_synthetic
+        real_pct_total = (total_real / train_total_all * 100) if train_total_all > 0 else 0
+        synth_pct_total = (total_synthetic / train_total_all * 100) if train_total_all > 0 else 0
+        
+        print(f"| {'TOTAL':<20} | {total_real:<20} | {real_pct_total:.2f}%{' ' * 14} | {total_synthetic:<24} | {synth_pct_total:.2f}%{' ' * 14} |")
+        print()
 
     
     
