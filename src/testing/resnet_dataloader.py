@@ -3,6 +3,7 @@
 # ---------------------------------------------------------------------------- #
 import json
 import os
+import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -11,8 +12,8 @@ from datasets import load_dataset
 import PIL.Image as Image
 from pathlib import Path
 import logging      
-    
-from src.waste_diffuser.dataloader_interface import dataloaderInterface
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from waste_diffuser.dataloader_interface import dataloaderInterface
 
 
 # ---------------------------------------------------------------------------- #
@@ -32,7 +33,7 @@ class ResNetDataloader(dataloaderInterface):
             "Both real_image_count and synthetic_image_count must be specified in the config file. Please check the config file and specify both values."
         
         
-        super().__init__(config,use_synthetic=True) 
+        super().__init__(config) 
         
         
 
@@ -71,6 +72,9 @@ class ResNetDataloader(dataloaderInterface):
                 data_dir = self.data_config["synthetic_data_dir"]
                 all_sub_categories = [category]
                 
+                if data_dir is None:
+                    print(f"[WARNING] synthetic_data_dir is not specified in the config file. Skipping synthetic data. Please check the config file and specify synthetic_data_dir.")
+                    break
             else:
                 data_dir = details["data_dir"] + "/" + split
                 all_sub_categories = details["sub_categories"]
@@ -201,7 +205,7 @@ class ResNetDataloader(dataloaderInterface):
         
         if self.preview == True:
             self.preview_dataloader(self.train_loader)
-        return self.dataloader
+        return self.train_loader
 
 
 # ---------------------------------------------------------------------------- #
