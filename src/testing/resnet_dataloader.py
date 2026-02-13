@@ -32,16 +32,18 @@ class ResNetDataloader(dataloaderInterface):
             "Both real_image_count and synthetic_image_count must be specified in the config file. Please check the config file and specify both values."
         
         
-        super().__init__(config)
+        super().__init__(config,use_synthetic=True) 
         
         
 
         # synthetic_train_split = self.generate_synth_split(split="train", image_count=synthetic_image_count)
 
 
-                              
-# ----------------------- Generate synthetic data split ---------------------- #
-    def generate_data_split(self, split,image_count=None):
+    def set_training_augmentations(self):
+        return super().set_training_augmentations()
+
+# ----------------- Generate data dictionary from config file ---------------- #
+    def generate_data_split(self, split, image_count=None):
         """Generate a data dictionary from the config file. The data dictionary will contain the filepaths, labels and split for each image in the dataset.
         arguments:
             split: str: the split to generate the data dictionary for (train, val, test)
@@ -49,7 +51,7 @@ class ResNetDataloader(dataloaderInterface):
             data_dict: list: a list of dictionaries containing the filepaths, labels and split for each image in the dataset
         """
         
-         # --- Image count handling --- #
+            # --- Image count handling --- #
         if image_count is not None:
             print(f"[INFO] Generating data dictionary for split: {split} with image count: {image_count}")
             class_image_count = {}
@@ -106,16 +108,66 @@ class ResNetDataloader(dataloaderInterface):
             data_dict.extend(category_images)
             
         return data_dict
+    
+# --------------------------- Define augmentations --------------------------- #
+    def training_augmentations(self):
+            # Preprocessing the datasets and DataLoaders creation.
+        spatial_augmentations = [
+            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
+            transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
+        ]
 
+        self.augmentations = transforms.Compose(
+            spatial_augmentations
+            + [
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+        return self.augmentations
+    
+# ------------------------- Validation augmentations ------------------------- #
+    def val_augmentations(self):
+            # Preprocessing the datasets and DataLoaders creation.
 
+        self.augmentations = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+        return self.augmentations
+
+# ------------- Transform images using the defined augmentations ------------- #
+    def train_transform(self, examples):
+        processed = []
+        for filepath in examples["filepath"]:
+            # Import as image using PIL
+            image = Image.open(filepath)
+            processed.append(self.train_aug(image.convert("RGB")))
+        class_indices = [self.class_LUT[cls] for cls in examples["class"]]
+        return {"image": processed, "class": class_indices}
+    
+# ----------------------- Validation transform function ---------------------- #
+    def val_transform(self, examples):
+        processed = []
+        for filepath in examples["filepath"]:
+            # Import as image using PIL
+            image = Image.open(filepath)
+            processed.append(self.val_aug(image.convert("RGB")))
+        class_indices = [self.class_LUT[cls] for cls in examples["class"]]
+        return {"image": processed, "class": class_indices}
 # ------------------------------ Get dataloader ------------------------------ #
     def get_dataloader(self, split="train"):
         # ----- Load data ----- #
-        real_train_split = self.generate_data_split(split="train", image_count=self.real_image_count)
-        val_split = self.generate_data_split(split="val")
-        synthetic_train_split = self.generate_data_split(split="synth", image_count=self.synthetic_image_count) ## CHANGED ##
         
-        data_dict = real_train_split + val_split + synthetic_train_split ## CHANGED ##
+
+        real_train_split = self.generate_data_split(split="train", image_count=self.real_image_count)
+        synthetic_train_split = self.generate_data_split(split="synth", image_count=self.synthetic_image_count)
+        val_split = self.generate_data_split(split="val")
+        
+        data_dict = real_train_split + val_split + synthetic_train_split
+
         
         # Print dataset summary
         self.print_dataset_summary(data_dict)
@@ -130,40 +182,26 @@ class ResNetDataloader(dataloaderInterface):
         # Load dataset from json file
         dataset = load_dataset("json", data_files=self.data_json_path)
         # Filter dataset into train and val splits
-        self.train_ds = dataset["train"].filter(lambda x: x["split"] == "train" or x["split"] == "synth") ## CHANGED ##
-        self.val_ds = dataset["train"].filter(lambda x: x["split"] == "val")
+        train_dataset = dataset["train"].filter(lambda x: x["split"] == "train" or x["split"] == "synth")
+        val_dataset = dataset["train"].filter(lambda x: x["split"] == "val")
         
-        print(f"[INFO] Dataset loaded from {self.config_path} with {len(self.train_ds)} training samples and {len(self.val_ds)} validation samples.")
-        if split == "train":
-            dataset = self.train_ds
-        elif split == "val":
-            dataset = self.val_ds
-        else:
-            raise ValueError("Invalid split. Must be 'train' or 'val'.")
+        print(f"[INFO] Dataset loaded from {self.config_path} with {len(train_dataset)} training samples and {len(val_dataset)} validation samples.")
+
+
         
         # --- Define augmentations --- #
-        # Preprocessing the datasets and DataLoaders creation.
-        spatial_augmentations = [
-            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
-            transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
-        ]
-
-        self.augmentations = transforms.Compose(
-            spatial_augmentations
-            + [
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
+        self.val_aug = self.val_augmentations()
+        self.train_aug = self.training_augmentations()
                   
-        dataset.set_transform(self.transform_images)
-        self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+        train_dataset.set_transform(self.train_transform)
+        val_dataset.set_transform(self.val_transform)
+        
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers) 
+        self.val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers) 
+        
         if self.preview == True:
-            self.preview_dataloader(self.dataloader)
+            self.preview_dataloader(self.train_loader)
         return self.dataloader
-
-
 
 
 # ---------------------------------------------------------------------------- #
