@@ -15,16 +15,20 @@
     "ema_power": 0.75,
     "ema_max_decay": 0.9999
   },
+  "vae": {
+    "use_vae": true,
+    "vae_model_path": "/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned"
+  },
   "hyperparameters": {
     "batch_size": 32,
-    "epochs": 100,
+    "epochs": 1000,
     "learning_rate": 0.00014,
     "dataloader_num_workers": 4
   },
   "logging": {
     "logger": "tensorboard",
-    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-10_4-class_128/",
-    "comment": "Bla. bla. bla.",
+    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-17_VAE_128/",
+    "comment": "Iterative work getting VAE to work",
     "checkpointing_steps": 5,
     "resume_from_checkpoint": true,
     "save_images_epochs": 10
@@ -36,26 +40,8 @@
     "classes": {
       "impregnated_wood": {
         "data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories",
-        "sub_categories": [
-          "impregnated_wood",
-          "impregnated_wood_painted",
-          "outdoor_wood",
-          "outdoor_wood_painted",
-          "forest_wood",
-          "fence_outdoor"
-        ]
-      },
-      "hard_plastic": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/plastic",
-        "sub_categories": ["hard_plastic"]
-      },
-      "soft_plastic": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/plastic",
-        "sub_categories": ["soft_plastic"]
-      },
-      "mineral_wool": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/mineral_wool/all_mineral_wool_categories",
-        "sub_categories": ["glass_wool_brown"]
+        "sub_categories": ["impregnated_wood"],
+        "train_img_count": 1000
       }
     }
   },
@@ -66,15 +52,12 @@
     "add_attention": true,
     "attention_head_dim": 8,
     "attn_norm_num_groups": null,
-    "block_out_channels": [128, 128, 256, 256, 512, 512, 512],
+    "block_out_channels": [320, 640, 1280, 1280],
     "center_input_sample": false,
     "class_embed_type": null,
     "down_block_types": [
       "DownBlock2D",
-      "DownBlock2D",
-      "DownBlock2D",
       "AttnDownBlock2D",
-      "DownBlock2D",
       "AttnDownBlock2D",
       "DownBlock2D"
     ],
@@ -83,7 +66,7 @@
     "dropout": 0.0,
     "flip_sin_to_cos": true,
     "freq_shift": 0,
-    "in_channels": 3,
+    "in_channels": 4,
     "layers_per_block": 2,
     "mid_block_scale_factor": 1,
     "mid_block_type": "UNetMidBlock2D",
@@ -91,18 +74,15 @@
     "norm_num_groups": 32,
     "num_class_embeds": null,
     "num_train_timesteps": null,
-    "out_channels": 3,
+    "out_channels": 4,
     "resnet_time_scale_shift": "default",
-    "sample_size": 128,
+    "sample_size": 16,
     "time_embedding_dim": null,
     "time_embedding_type": "positional",
     "up_block_types": [
       "UpBlock2D",
       "AttnUpBlock2D",
-      "UpBlock2D",
       "AttnUpBlock2D",
-      "UpBlock2D",
-      "UpBlock2D",
       "UpBlock2D"
     ],
     "upsample_type": "conv"
