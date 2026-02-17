@@ -1,0 +1,120 @@
+
+import argparse
+import torch
+from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
+import sys
+import os
+def parse_args():
+    parser = argparse.ArgumentParser(description="Generate images using diffusion models")
+    parser.add_argument(
+        "--model_dir",
+        type=str,
+        default="/media/aris/Data/master2025dev/aris_master/training/ddim-ema-impregnated-wood-128-2x_self_attention",
+        help="Path to the trained model directory"
+    )
+    parser.add_argument(
+        "--vae",
+        action="store_true",
+        help="Use VAE for decoding latents"
+    )
+    parser.add_argument(
+        "--vae_dir",
+        type=str,
+        default="/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned",
+        help="Path to the VAE model directory (used when --vae is set)"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=16,
+        help="Number of images to generate"
+    )
+    parser.add_argument(
+        "--num_inference_steps",
+        type=int,
+        default=50,
+        help="Number of denoising steps"
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="/media/aris/Data/master2025dev/datasets/synthetic/00-00-default_output_path",
+        help="Output directory for the generated images"
+    )
+    parser.add_argument(
+        "--image_num",
+        type=int,
+        default=1,
+        help="Number of images to generate for each class"
+    )
+    return parser.parse_args()
+
+class Dataset_gen:
+    #TODO: import the .config file and extract the class names for later use
+    def __init__(self):
+        self.args = parse_args()
+        
+        pipeline = DDIMPipeline.from_pretrained(self.args.model_dir)
+        self.pipeline = pipeline.to("cuda")
+        
+        #Make sure output directory exists
+        os.makedirs(self.args.output_dir, exist_ok=True)
+        
+        print(self.pipeline.unet.config)
+        
+        if self.pipeline.unet.config.num_class_embeds is None:
+            print("Model is unconditional. Generating images without class labels.")
+            self.generate_images_unconditional()
+        else:
+            print(f"Model is conditional with {self.pipeline.unet.config.num_class_embeds} class embeds. Generating images for each class.")
+            self.generate_images()
+            
+    def generate_images(self):
+        for class_label in range(self.pipeline.unet.config.num_class_embeds):
+            print(f"Generating images for class {class_label}...")
+            images = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.image_num, class_labels=[class_label]*self.args.image_num).images
+            # Save images to output directory
+            for i, image in enumerate(images):
+                image.save(f"{self.args.output_dir}/class_{class_label}_image_{i}.png")
+                
+    def generate_images_unconditional(self):
+        #Check amount of images already in output directory
+        existing_images = len([f for f in os.listdir(self.args.output_dir) if f.endswith(".png")])
+        print(f"Found {existing_images} existing images in output directory.")
+        if existing_images >= self.args.image_num:
+            print(f"Already have {existing_images} images, which is >= requested {self.args.image_num}. Skipping generation.")
+            return
+        else:
+            print(f"Generating {self.args.image_num - existing_images} new images...")
+            n_images_to_generate = self.args.image_num - existing_images
+            for i in range(n_images_to_generate//self.args.batch_size):
+                print(f"Generating batch {i+1}/{n_images_to_generate//self.args.batch_size}..." )
+                image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.batch_size).images
+                # Save images to output directory
+                for j, img in enumerate(image):
+                    img.save(f"{self.args.output_dir}/{i*self.args.batch_size + j:04d}.png")
+            
+            # Handle remaining images if image_num is not divisible by batch_size
+            remaining = n_images_to_generate % self.args.batch_size
+            if remaining > 0:
+                print(f"Generating remaining {remaining} images...")
+                image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=remaining).images
+                for j, img in enumerate(image):
+                    img.save(f"{self.args.output_dir}/{(self.args.image_num - remaining) + j:04d}.png")
+                
+
+if __name__ == "__main__":
+    # Check if parse_args are empty
+    if len(sys.argv) == 1:
+        print("No arguments provided. Using default arguments for testing...")
+        
+        # Default arguments for testing
+        sys.argv.extend([
+            "--model_dir", "/media/aris/Data/master2025dev/aris_master/training/02-03_impregnated-wood_128_2x-self-attention",
+            "--output_dir", "/media/aris/Data/master2025dev/datasets/synthetic/02-03_impregnated-wood_128_2x-self-attention",
+            #"--vae",
+            "--batch_size", "16",
+            "--num_inference_steps", "50",
+            "--image_num", "1000"
+        ])
+    dataset_gen = Dataset_gen()

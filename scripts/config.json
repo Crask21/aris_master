@@ -18,12 +18,12 @@
   "hyperparameters": {
     "batch_size": 32,
     "epochs": 100,
-    "learning_rate": 0.0001,
+    "learning_rate": 0.00014,
     "dataloader_num_workers": 4
   },
   "logging": {
     "logger": "tensorboard",
-    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/10-02_training_code_debugging/",
+    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-10_4-class_128/",
     "comment": "Bla. bla. bla.",
     "checkpointing_steps": 5,
     "resume_from_checkpoint": true,

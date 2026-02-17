@@ -26,10 +26,28 @@ from diffusers.schedulers import DDIMScheduler
 import inspect
 from tqdm.auto import tqdm
 import torch.nn.functional as F
+import sys
+from pathlib import Path
+
+from summarize_training.save_config import save_args_as_config
+from summarize_training.generate_config_summary import generate_data_summary
 
 class training:
     def __init__(self):
         self.args = parse_args()
+        
+        # --------------------------------- AP NOTES --------------------------------- #
+        try:
+            save_args_as_config(args=self.args, parser=None) # config.json
+        except Exception as e:
+            print(f"WARNING: Failed to save config: {e}", file=sys.stderr)
+        
+        try:
+            generate_data_summary(dataset_path=self.args.train_data_dir, output_path=self.args.output_dir, comment=self.args.comment) # notes.md
+        except Exception as e:
+            print(f"WARNING: Failed to generate data summary: {e}", file=sys.stderr)
+        # ------------------------------- AP NOTES END ------------------------------- #
+        return
         
         dl_interface = dataloaderInterface(self.args.config_path)
         self.dataloader = dl_interface.dataloader
@@ -216,6 +234,99 @@ class training:
         return res.expand(broadcast_shape)
     
     def train(self):
+        
+        for epoch in range(self.first_epoch, self.args.num_epochs):
+            
+            self.model.train()
+            self.progress_bar = tqdm(total=self.num_update_steps_per_epoch)
+            self.progress_bar.set_description(f"Epoch {epoch}")
+            for step, batch in enumerate(self.train_dataloader):
+                # Skip steps until we reach the resumed step
+                if self.args.resume_from_checkpoint and epoch == self.first_epoch and step < self.resume_step:
+                    if step % self.args.gradient_accumulation_steps == 0:
+                        self.progress_bar.update(1)
+                    continue
+                
+                
+                class_labels = batch["class"]
+                class_labels = class_labels.to(self.accelerator.device)
+                clean_images = batch["image"].to(self.accelerator.device)
+                # Sample noise that we'll add to the images
+                noise = torch.randn(clean_images.shape, dtype=self.weight_dtype, device=clean_images.device)
+                bsz = clean_images.shape[0]
+                
+                # Sample a random timestep for each image
+                timesteps = torch.randint(
+                    0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=clean_images.device
+                ).long()
+                
+                # Add noise to the clean images according to the noise magnitude at each timestep
+                # (this is the forward diffusion process)
+                noisy_images = self.noise_scheduler.add_noise(clean_images, noise, timesteps)
+            
+                
+                
+                # ----------------------------- model predictions ---------------------------- #
+                with self.accelerator.accumulate(self.model):
+                    # Predict the noise residual
+                    model_output = self.model(noisy_images, timesteps, class_labels=class_labels).sample
+
+                    if self.args.prediction_type == "epsilon":
+                        loss = F.mse_loss(model_output.float(), noise.float())  # this could have different weights!
+                    elif self.args.prediction_type == "sample":
+                        alpha_t = self._extract_into_tensor(
+                            self.noise_scheduler.alphas_cumprod, timesteps, (clean_images.shape[0], 1, 1, 1)
+                        )
+                        snr_weights = alpha_t / (1 - alpha_t)
+                        # use SNR weighting from distillation paper
+                        loss = snr_weights * F.mse_loss(model_output.float(), clean_images.float(), reduction="none")
+                        loss = loss.mean()
+                    else:
+                        raise ValueError(f"Unsupported prediction type: {self.args.prediction_type}")
+                    
+                    self.accelerator.backward(loss)
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.clip_grad_norm_(self.model.parameters(), 1.0)
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
+                    
+                # ------------------------------ SAVE CHECKPOINT ----------------------------- #
+                self.save_checkpoint(loss)
+            self.progress_bar.close()
+            
+            # --------------- Generate sample images for visual inspection --------------- #
+            if epoch % self.args.save_images_epochs == 0 or epoch == self.args.num_epochs - 1:
+                unet = self.accelerator.unwrap_model(self.model)
+                images_processed = self.inference(unet,
+                                                scheduler=self.noise_scheduler,
+                                                )
+
+                tracker = self.accelerator.get_tracker("tensorboard", unwrap=True)
+                tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+            
+            if epoch % self.args.save_model_epochs == 0 or epoch == self.args.num_epochs - 1:
+                # save the model
+                unet = self.accelerator.unwrap_model(self.model)
+
+                if self.args.use_ema:
+                    self.ema_model.store(unet.parameters())
+                    self.ema_model.copy_to(unet.parameters())
+
+                pipeline = DDIMPipeline(
+                    unet=unet,
+                    scheduler=self.noise_scheduler,
+                )
+
+                pipeline.save_pretrained(self.args.output_dir)
+
+                if self.args.use_ema:
+                    self.ema_model.restore(unet.parameters())
+            
+            
+            self.accelerator.end_training()
+    
+    def train_vae(self, vae):
         
         for epoch in range(self.first_epoch, self.args.num_epochs):
             

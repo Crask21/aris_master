@@ -127,7 +127,7 @@ if __name__ == "__main__":
         val_correct, val_total = 0, 0
         with torch.no_grad():
             for batch in val_loader:
-                labels = batch["class"]
+                labels, inputs = batch["class"]
                 inputs = batch["image"]
                 inputs = inputs.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)

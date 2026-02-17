@@ -1,10 +1,4 @@
 {
-  "hyperparameters": {
-    "batch_size": 16,
-    "epochs": 100,
-    "learning_rate": 0.0001,
-    "dataloader_num_workers": 4
-  },
   "logging": {
     "logger": "tensorboard",
     "output_dir": "/media/aris/Data/master2025dev/aris_master/training/template/",
@@ -21,6 +15,7 @@
     "synthetic_data_dir": "/media/aris/Data/master2025dev/datasets/synthetic/02-07_fake-for-testing",
     "classes": {
       "impregnated_wood": {
+        "diffusion_image_count": null,
         "data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories",
         "sub_categories": [
           "impregnated_wood",
@@ -32,18 +27,21 @@
         ]
       },
       "hard_plastic": {
+        "diffusion_image_count": null,
         "data_dir": "/media/aris/Data/master2025dev/datasets/plastic",
         "sub_categories": [
           "hard_plastic"
         ]
       },
       "soft_plastic": {
+        "diffusion_image_count": null,
         "data_dir": "/media/aris/Data/master2025dev/datasets/plastic",
         "sub_categories": [
           "soft_plastic"
         ]
       },
       "mineral_wool": {
+        "diffusion_image_count": null,
         "data_dir": "/media/aris/Data/master2025dev/datasets/mineral_wool/all_mineral_wool_categories",
         "sub_categories": [
           "glass_wool_brown"
