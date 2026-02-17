@@ -11,7 +11,8 @@
     "comment": "Bla. bla. bla.",
     "checkpointing_steps": 1,
     "resume_from_checkpoint": true,
-    "checkpoint_dir": null
+    "checkpoint_dir": null,
+    "seed": 42
   },
   "data": {
     "resolution": 128,

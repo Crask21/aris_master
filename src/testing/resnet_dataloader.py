@@ -12,19 +12,25 @@ from datasets import load_dataset
 import PIL.Image as Image
 from pathlib import Path
 import logging      
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.conditional.train_conditional_notesmd_test import generate_data_summary_from_config
-from waste_diffuser.dataloader_interface import dataloaderInterface
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from src.waste_diffuser.dataloader_interface import dataloaderInterface
+
+# Add scripts directory to path for imports
+# scripts_path = str(Path(__file__).resolve().parent.parent.parent / "scripts")
+# if scripts_path not in sys.path:
+#     sys.path.insert(0, scripts_path)
+from src.summarize_training.generate_config_summary import generate_data_summary_from_config
 
 
 # ---------------------------------------------------------------------------- #
 #                                     Class                                    #
 # ---------------------------------------------------------------------------- #
 class ResNetDataloader(dataloaderInterface):
-    def __init__(self, config):
+    def __init__(self, config_path):
         
-        with open(config, 'r') as f:
-            data_config = json.load(f)["data"]
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        data_config = config["data"]
         self.real_image_count = data_config["real_image_count"]
         self.synthetic_image_count = data_config["synthetic_image_count"]
         
@@ -33,8 +39,9 @@ class ResNetDataloader(dataloaderInterface):
         assert self.real_image_count is not None or self.synthetic_image_count is not None, \
             f"Either real_image_count or synthetic_image_count must be specified in the config file. Please check the config file and specify at least one of them.\n Config file: {Path(config).resolve()}"
         
+        self.seed = config["logging"]["seed"]
         
-        super().__init__(config) 
+        super().__init__(config_path) 
         
         
 
@@ -201,8 +208,8 @@ class ResNetDataloader(dataloaderInterface):
         train_dataset.set_transform(self.train_transform)
         val_dataset.set_transform(self.val_transform)
         
-        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers) 
-        self.val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers) 
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, generator=torch.Generator().manual_seed(self.seed)) 
+        self.val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,generator=torch.Generator().manual_seed(self.seed)) 
         
         if self.preview == True:
             self.preview_dataloader(self.train_loader)
