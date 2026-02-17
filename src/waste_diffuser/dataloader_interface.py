@@ -71,10 +71,11 @@ class dataloaderInterface:
         
         
         # Save config file to output directory
-        output_config_path = os.path.join(self.output_dir, "config.json")
-        with open(output_config_path, 'w') as f:
+        self.output_config_path = os.path.join(self.output_dir, "config.json")
+        with open(self.output_config_path, 'w') as f:
             json.dump(config, f, indent=4)
-        print(f"[INFO] Config file saved to {output_config_path}")
+        
+        print(f"[INFO] Config file saved to {self.output_config_path}")
         
 # ----------------- Generate data dictionary from config file ---------------- #
     def generate_data_split(self, split: str):
