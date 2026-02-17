@@ -1,0 +1,14 @@
+{
+    "split": "val",
+    "checkpoint": "testing/testing_dir/resnet18/resnet18_epoch5_valacc45.25_val_loss0.7205.ckpt",
+    "num_samples": 990,
+    "num_classes": 2,
+    "class_names": [
+        "impregnated_wood",
+        "normal_wood"
+    ],
+    "accuracy": 0.45252525252525255,
+    "precision": 0.699092970521542,
+    "recall": 0.45252525252525255,
+    "f1_score": 0.2926615247037782
+}

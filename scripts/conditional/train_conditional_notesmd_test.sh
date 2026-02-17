@@ -18,7 +18,7 @@ TRAINING_DIR="/media/aris/Data/master2025dev/aris_master/training/"
 # Define session name
 SESSION_NAME="07-02_2-class-conditioning-wood-plastic_128_TEST"
 
-accelerate launch train_conditional.py \
+accelerate launch train_conditional_notesmd_test.py \
   --output_dir="${TRAINING_DIR}${SESSION_NAME}" \
   --train_data_dir="$DATASET_DIR/wood/4_main_categories_512x512/train/impregnated_wood/" \
   --train_data_dir2="$DATASET_DIR/plastic/train/hard_plastic"\
@@ -31,7 +31,8 @@ accelerate launch train_conditional.py \
   --lr_warmup_steps=500 \
   --checkpointing_steps=5000 \
   --comment="Conditional training with two datasets TEST" \
-  --resume_from_checkpoint="latest"
+  --resume_from_checkpoint="latest"\
+  --config_path="/media/aris/Data/master2025dev/aris_master/src/summarize_training/config_summarise_test.json"
 
   # python3 inference.py \
   #   --model_dir="${TRAINING_DIR}${SESSION_NAME}" \

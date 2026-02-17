@@ -28,9 +28,12 @@ from tqdm.auto import tqdm
 import torch.nn.functional as F
 import sys
 from pathlib import Path
+import time
+from utils.pushover import send_notification
 
 from summarize_training.save_config import save_args_as_config
 from summarize_training.generate_config_summary import generate_data_summary
+from waste_diffuser.pipeline import Pipeline
 
 class training:
     def __init__(self):
@@ -47,7 +50,6 @@ class training:
         except Exception as e:
             print(f"WARNING: Failed to generate data summary: {e}", file=sys.stderr)
         # ------------------------------- AP NOTES END ------------------------------- #
-        return
         
         dl_interface = dataloaderInterface(self.args.config_path)
         self.dataloader = dl_interface.dataloader
@@ -121,8 +123,21 @@ class training:
         # Load checkpoint if specified
         self.load_checkpoint()
         
+        # Load VAE if specified
+        if config["vae"]["use_vae"]:
+            self.vae = AutoencoderKL.from_pretrained(config["vae"]["vae_model_path"]).to(self.accelerator.device)
+        
         # ----------------------------------- TRAIN ---------------------------------- #
-        self.train()
+        try:
+            if config["vae"]["use_vae"]:
+                self.train_vae()
+            else:
+                self.train()
+        except Exception as e:
+            print(f"\n✗ Error during training: {e}")
+            send_notification(
+                title="Training error",
+                message=f"An error occurred during training of {self.output_dir}: {e}")
     
     def initialize(self):
         '''
@@ -235,6 +250,8 @@ class training:
     
     def train(self):
         
+        start_time = time.time()
+        
         for epoch in range(self.first_epoch, self.args.num_epochs):
             
             self.model.train()
@@ -322,11 +339,26 @@ class training:
 
                 if self.args.use_ema:
                     self.ema_model.restore(unet.parameters())
+                        
+            # -------------------------- Estimate remaining time ------------------------- #
+            elapsed_time = time.time() - start_time
+            avg_time_per_epoch = elapsed_time / (epoch + 1)
+            remaining_time = avg_time_per_epoch * (self.num_epochs - epoch - 1)
+            # remaining time in hh:mm:ss format
+            remaining_time_hms = time.strftime("%H:%M:%S", time.gmtime(remaining_time))
+            # Estimated time that the model is expected to finish training
+            estimated_finish_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + remaining_time))
+            print(f"Remaining time: {remaining_time_hms}, Estimated finish time: {estimated_finish_time}")
+        send_notification(
+            title="Training complete",
+            message=f"Training of {self.output_dir} is complete! Total training time: {time.strftime('%H:%M:%S', time.gmtime(elapsed_time))}")
+            
+        
             
             
-            self.accelerator.end_training()
+        self.accelerator.end_training()
     
-    def train_vae(self, vae):
+    def train_vae(self):
         
         for epoch in range(self.first_epoch, self.args.num_epochs):
             
@@ -344,6 +376,16 @@ class training:
                 class_labels = batch["class"]
                 class_labels = class_labels.to(self.accelerator.device)
                 clean_images = batch["image"].to(self.accelerator.device)
+                
+                
+                # print(f"Clean images shape: {clean_images.shape}, dtype: {clean_images.dtype}")
+                # VAE ENCODING:
+                with torch.no_grad():
+                    clean_images = self.vae.encode(clean_images).latent_dist.sample()
+                    # Scale latents by VAE scaling factor (important!)
+                    clean_images = clean_images * self.vae.config.scaling_factor
+                    # print(f"Latent images shape: {clean_images.shape}, dtype: {clean_images.dtype}")
+                    
                 # Sample noise that we'll add to the images
                 noise = torch.randn(clean_images.shape, dtype=self.weight_dtype, device=clean_images.device)
                 bsz = clean_images.shape[0]
@@ -393,6 +435,7 @@ class training:
                 unet = self.accelerator.unwrap_model(self.model)
                 images_processed = self.inference(unet,
                                                 scheduler=self.noise_scheduler,
+                                                vae=self.vae
                                                 )
 
                 tracker = self.accelerator.get_tracker("tensorboard", unwrap=True)
@@ -463,7 +506,7 @@ class training:
             self.ema_model.store(unet.parameters())
             self.ema_model.copy_to(unet.parameters())
 
-        pipeline = DDIMPipeline(
+        pipeline = Pipeline(
             unet=unet,
             scheduler=scheduler,
         )
@@ -483,6 +526,17 @@ class training:
             class_labels=class_labels,
             return_dict=False
         )[0]
+        
+        if vae is not None:
+            print(f"Generated latents shape: {latents.shape}, dtype: {latents.dtype}")
+            print("Decoding latents with VAE.")
+            with torch.no_grad():
+                # Unscale latents before decoding
+                latents = latents / vae.config.scaling_factor
+                latents = vae.decode(latents).sample.float().cpu().numpy()
+            latents = latents.transpose(0, 2, 3, 1)  # Convert back to (B, H, W, C)
+            print("Decoded images shape:", latents.shape, "Decoded images dtype:", latents.dtype, "Decoded images min:", latents.min(), "Decoded images max:", latents.max())
+            
 
         if self.args.use_ema:
             self.ema_model.restore(unet.parameters())
@@ -490,8 +544,8 @@ class training:
         images = latents
         self.logger.info(f"Generated latents shape: {images.shape}")
         
-        # denormalize the images
-        images_processed = (images * 255).round().astype("uint8")
+        # denormalize the images (VAE outputs are in [-1, 1] range)
+        images_processed = ((images / 2 + 0.5).clip(0, 1) * 255).round().astype("uint8")
         return images_processed
     
     def display_batch(self, batch, num_images=9):
