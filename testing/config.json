@@ -1,4 +1,10 @@
 {
+  "hyperparameters": {
+    "batch_size": 16,
+    "epochs": 5,
+    "learning_rate": 0.0001,
+    "dataloader_num_workers": 4
+  },
   "logging": {
     "logger": "tensorboard",
     "output_dir": "/media/aris/Data/master2025dev/aris_master/training/template/",

@@ -13,6 +13,7 @@ import PIL.Image as Image
 from pathlib import Path
 import logging      
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from scripts.conditional.train_conditional_notesmd_test import generate_data_summary_from_config
 from waste_diffuser.dataloader_interface import dataloaderInterface
 
 
@@ -28,9 +29,9 @@ class ResNetDataloader(dataloaderInterface):
         self.synthetic_image_count = data_config["synthetic_image_count"]
         
         
-        # [Assertion] Assert that both real_image_count and synthetic_image_count are specified in the config file
-        assert self.real_image_count is not None and self.synthetic_image_count is not None, \
-            "Both real_image_count and synthetic_image_count must be specified in the config file. Please check the config file and specify both values."
+        # [Assertion] Assert that either real_image_count or synthetic_image_count is specified in the config file
+        assert self.real_image_count is not None or self.synthetic_image_count is not None, \
+            f"Either real_image_count or synthetic_image_count must be specified in the config file. Please check the config file and specify at least one of them.\n Config file: {Path(config).resolve()}"
         
         
         super().__init__(config) 
@@ -172,7 +173,7 @@ class ResNetDataloader(dataloaderInterface):
         
         data_dict = real_train_split + val_split + synthetic_train_split
 
-        
+        generate_data_summary_from_config(config_path=self.config_path, data_dict=data_dict) # Generate notes.md summary of the dataset based on the config file and the generated data dictionary
         # Print dataset summary
         self.print_dataset_summary(data_dict)
         

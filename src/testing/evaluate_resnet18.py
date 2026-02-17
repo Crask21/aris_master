@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+# ---------------------------------------------------------------------------- #
+#                                    Imports                                   #
+# ---------------------------------------------------------------------------- #
+import json
+import sys
+import os
+import torch
+import torch.nn as nn
+import torchvision
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from pathlib import Path
+from tqdm import tqdm
+from argparse import ArgumentParser
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    accuracy_score,
+    precision_recall_fscore_support
+)
+
+from resnet_dataloader import ResNetDataloader
+
+
+# ---------------------------------------------------------------------------- #
+#                            Evaluation Functions                              #
+# ---------------------------------------------------------------------------- #
+def load_model(checkpoint_path, num_classes, device):
+    """
+    Load ResNet18 model from checkpoint.
+    
+    Args:
+        checkpoint_path: Path to checkpoint file
+        num_classes: Number of output classes
+        device: torch device (cuda/cpu)
+    
+    Returns:
+        model: Loaded model
+        checkpoint: Full checkpoint dict with training history
+    """
+    # Create model architecture
+    model = torchvision.models.resnet18(pretrained=False)
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    
+    # Load checkpoint
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    
+    print(f"Loading checkpoint from: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model = model.to(device)
+    model.eval()
+    
+    return model, checkpoint
+
+
+def get_test_loader(config_path, dataloader_instance=None):
+    """
+    Get test dataloader if available, otherwise use validation dataloader.
+    
+    Args:
+        config_path: Path to config file
+        dataloader_instance: Existing ResNetDataloader instance (optional)
+    
+    Returns:
+        test_loader: DataLoader for testing
+        split_name: Name of the split being used ('test' or 'val')
+        class_names: List of class names
+    """
+    if dataloader_instance is None:
+        dataloader_instance = ResNetDataloader(config_path)
+    
+    try:
+        if dataloader_instance.test_loader is not None:
+            return dataloader_instance.test_loader, "test", dataloader_instance.classes
+    except AttributeError:
+        print("[WARNING] test_loader not found in dataloader instance, trying val_loader...")
+    
+    if dataloader_instance.val_loader is not None:
+        return dataloader_instance.val_loader, "val", dataloader_instance.classes
+    
+    else:
+        raise ValueError("No test or validation dataloader found in config")
+
+def evaluate_model(model, dataloader, device, class_names):
+    """
+    Evaluate model on a dataset.
+    
+    Args:
+        model: PyTorch model
+        dataloader: DataLoader for evaluation
+        device: torch device
+        class_names: List of class names
+    
+    Returns:
+        results: Dictionary containing predictions, labels, filepaths, and metrics
+    """
+    model.eval()
+    
+    all_predictions = []
+    all_labels = []
+    all_probs = []
+    all_filepaths = []
+    
+    print(f"[INFO] Evaluating model on {len(dataloader.dataset)} samples...")
+    
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Evaluating"):
+            inputs = batch["image"].to(device)
+            labels = batch["class"].to(device)
+            
+            outputs = model(inputs)
+            probs = torch.softmax(outputs, dim=1)
+            _, predicted = outputs.max(1)
+            
+            all_predictions.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
+            
+            # Try to get filepaths if available
+            if "filepath" in batch:
+                all_filepaths.extend(batch["filepath"])
+    
+    # Convert to numpy arrays
+    all_predictions = np.array(all_predictions)
+    all_labels = np.array(all_labels)
+    all_probs = np.array(all_probs)
+    
+    # Calculate metrics
+    accuracy = accuracy_score(all_labels, all_predictions)
+    precision, recall, f1, support = precision_recall_fscore_support(
+        all_labels, all_predictions, average='weighted'
+    )
+    
+    results = {
+        "predictions": all_predictions,
+        "labels": all_labels,
+        "probabilities": all_probs,
+        "filepaths": all_filepaths,
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "class_names": class_names
+    }
+    
+    print(f"\n[RESULTS]")
+    print(f"  Accuracy:  {accuracy*100:.2f}%")
+    print(f"  Precision: {precision:.4f}")
+    print(f"  Recall:    {recall:.4f}")
+    print(f"  F1 Score:  {f1:.4f}")
+    
+    return results
+
+
+def save_predictions_csv(results, output_path):
+    """
+    Save predictions to CSV file.
+    
+    Args:
+        results: Results dictionary from evaluate_model
+        output_path: Path to save CSV file
+    """
+    class_names = results["class_names"]
+    
+    # Create DataFrame
+    df_data = {
+        "true_label": [class_names[label] for label in results["labels"]],
+        "predicted_label": [class_names[pred] for pred in results["predictions"]],
+        "correct": results["labels"] == results["predictions"],
+        "probabilities": results["probabilities"].tolist()
+    }
+    
+    # Add probability columns for each class
+    for i, class_name in enumerate(class_names):
+        df_data[f"prob_{class_name}"] = results["probabilities"][:, i]
+    
+    # Add filepaths if available
+    if len(results["filepaths"]) > 0:
+        df_data["filepath"] = results["filepaths"]
+    
+    df = pd.DataFrame(df_data)
+    df.to_csv(output_path, index=False)
+    print(f"[INFO] Predictions saved to: {output_path}")
+
+
+def save_confusion_matrix(results, output_path):
+    """
+    Save confusion matrix as image.
+    
+    Args:
+        results: Results dictionary from evaluate_model
+        output_path: Path to save confusion matrix image
+    """
+    class_names = results["class_names"]
+    cm = confusion_matrix(results["labels"], results["predictions"])
+    
+    # Create figure
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt='d',
+        cmap='Blues',
+        xticklabels=class_names,
+        yticklabels=class_names,
+        cbar_kws={'label': 'Count'}
+    )
+    plt.title('Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Confusion matrix saved to: {output_path}")
+    
+    # Also save normalized confusion matrix
+    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+    output_path_norm = output_path.replace('.png', '_normalized.png')
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(
+        cm_normalized,
+        annot=True,
+        fmt='.2%',
+        cmap='Blues',
+        xticklabels=class_names,
+        yticklabels=class_names,
+        cbar_kws={'label': 'Percentage'}
+    )
+    plt.title('Normalized Confusion Matrix')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+    plt.tight_layout()
+    plt.savefig(output_path_norm, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"[INFO] Normalized confusion matrix saved to: {output_path_norm}")
+
+
+def save_classification_report(results, output_path):
+    """
+    Save classification report as text file.
+    
+    Args:
+        results: Results dictionary from evaluate_model
+        output_path: Path to save classification report
+    """
+    class_names = results["class_names"]
+    report = classification_report(
+        results["labels"],
+        results["predictions"],
+        target_names=class_names,
+        digits=4
+    )
+    
+    with open(output_path, 'w') as f:
+        f.write("Classification Report\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(report)
+        f.write("\n\n")
+        f.write("Overall Metrics\n")
+        f.write("-" * 80 + "\n")
+        f.write(f"Accuracy:  {results['accuracy']*100:.2f}%\n")
+        f.write(f"Precision: {results['precision']:.4f}\n")
+        f.write(f"Recall:    {results['recall']:.4f}\n")
+        f.write(f"F1 Score:  {results['f1']:.4f}\n")
+    
+    print(f"[INFO] Classification report saved to: {output_path}")
+    print("\n" + "=" * 80)
+    print(report)
+    print("=" * 80)
+
+
+def evaluate_resnet18(config_path, checkpoint_path=None, output_dir=None):
+    """
+    Main evaluation function that can be called programmatically.
+    
+    Args:
+        config_path: Path to config JSON file
+        checkpoint_path: Path to model checkpoint (optional, will use config if None)
+        output_dir: Output directory for results (optional, will use config if None)
+    
+    Returns:
+        results: Dictionary containing all evaluation results and metrics
+    """
+    # Load config
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    
+    # Set checkpoint path from config if not provided
+    if checkpoint_path is None:
+        checkpoint_path = config["logging"].get("checkpoint_dir")
+        if checkpoint_path is None:
+            raise ValueError("No checkpoint path provided and none found in config")
+    
+    # Set output directory
+    if output_dir is None:
+        output_dir = config["logging"]["output_dir"] + "/evaluation/"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Setup device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Using device: {device}")
+    
+    # Load dataloader
+    print("[INFO] Loading dataloader...")
+    dataloader_instance = ResNetDataloader(config_path)
+    
+    # Get test loader (or validation as fallback)
+    test_loader, split_name, class_names = get_test_loader(config_path, dataloader_instance)
+    num_classes = len(class_names)
+    
+    # Load model
+    model, checkpoint = load_model(checkpoint_path, num_classes, device)
+    
+    # Print checkpoint info
+    if "epoch" in checkpoint:
+        print(f"[INFO] Loaded checkpoint from epoch {checkpoint['epoch'] + 1}")
+    if "val_acc" in checkpoint and len(checkpoint["val_acc"]) > 0:
+        print(f"[INFO] Best validation accuracy during training: {max(checkpoint['val_acc']):.2f}%")
+    
+    # Evaluate model
+    results = evaluate_model(model, test_loader, device, class_names)
+    results["split_name"] = split_name
+    results["checkpoint_path"] = checkpoint_path
+    results["config_path"] = config_path
+    
+    # Save results
+    print(f"\n[INFO] Saving results to: {output_dir}")
+    save_predictions_csv(results, os.path.join(output_dir, f"predictions_{split_name}.csv"))
+    save_confusion_matrix(results, os.path.join(output_dir, f"confusion_matrix_{split_name}.png"))
+    save_classification_report(results, os.path.join(output_dir, f"classification_report_{split_name}.txt"))
+    
+    # Save summary JSON
+    summary = {
+        "split": split_name,
+        "checkpoint": checkpoint_path,
+        "num_samples": len(results["labels"]),
+        "num_classes": num_classes,
+        "class_names": class_names,
+        "accuracy": float(results["accuracy"]),
+        "precision": float(results["precision"]),
+        "recall": float(results["recall"]),
+        "f1_score": float(results["f1"])
+    }
+    
+    summary_path = os.path.join(output_dir, f"evaluation_summary_{split_name}.json")
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=4)
+    print(f"[INFO] Evaluation summary saved to: {summary_path}")
+    
+    print("\n✓ Evaluation complete!")
+    return results
+
+
+# ---------------------------------------------------------------------------- #
+#                                     Main                                     #
+# ---------------------------------------------------------------------------- #
+def main():
+    parser = ArgumentParser(description="Evaluate ResNet18 model on test/validation dataset")
+    parser.add_argument(
+        "--config",
+        type=str,
+        required=True,
+        help="Path to config JSON file"
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to model checkpoint (optional, will use checkpoint from config if not provided)"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Output directory for evaluation results (optional, will use config output_dir/evaluation if not provided)"
+    )
+    
+    args = parser.parse_args()
+    
+    try:
+        results = evaluate_resnet18(
+            config_path=args.config,
+            checkpoint_path=args.checkpoint,
+            output_dir=args.output_dir
+        )
+    except Exception as e:
+        print(f"[ERROR] Evaluation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

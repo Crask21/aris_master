@@ -89,6 +89,146 @@ def find_images_in_category(category_dir: Path, images_subdir: str, allowed_exts
     return images
 
 
+def analyze_data_dict(data_dict: List[Dict]) -> Tuple[str, Dict]:
+    """
+    Analyze dataset structure from a data dictionary.
+    
+    Args:
+        data_dict: List of dictionaries with format:
+            [
+                {'filepath': '/path/to/image.png', 'class': 'class_name', 'split': 'train'},
+                ...
+            ]
+    
+    Returns:
+        Tuple of (structure_type, data_dict)
+        structure_type: "train_val" or "categories"
+        data_dict: Contains image counts organized by structure
+    """
+    # Group by split and class
+    split_data = {}
+    
+    for item in data_dict:
+        split = item['split']
+        class_name = item['class']
+        
+        if split not in split_data:
+            split_data[split] = {}
+        
+        if class_name not in split_data[split]:
+            split_data[split][class_name] = 0
+        
+        split_data[split][class_name] += 1
+    
+    # Check if we have splits
+    has_splits = len(split_data) > 1 or any(s in split_data for s in ['train', 'val', 'test', 'synth'])
+    
+    if has_splits:
+        return "train_val", split_data
+    else:
+        # Single category structure (only one split, no train/val/test)
+        # Flatten to just category counts
+        category_data = {}
+        for split_name, categories in split_data.items():
+            for class_name, count in categories.items():
+                if class_name not in category_data:
+                    category_data[class_name] = 0
+                category_data[class_name] += count
+        return "categories", category_data
+
+
+def analyze_dataset_from_config(class_dict: Dict, images_subdir: str = "images") -> Tuple[str, Dict]:
+    """
+    Analyze dataset structure from a config class dictionary.
+    
+    Args:
+        class_dict: Dictionary with format:
+            {
+                'parent_category': {
+                    'data_dir': '/path/to/data',
+                    'sub_categories': ['subcat1', 'subcat2'],
+                    'train_img_count': 1000  # optional
+                },
+                ...
+            }
+        images_subdir: Name of images subdirectory within categories (default: "images")
+    
+    Returns:
+        Tuple of (structure_type, data_dict)
+        structure_type: "train_val" or "categories"
+        data_dict: Contains image counts organized by structure
+    """
+    allowed_exts = get_allowed_extensions()
+    
+    # First, check if any data_dir has train/val/test splits at root level
+    # We need to check the first data_dir to determine the structure
+    sample_data_dir = Path(list(class_dict.values())[0]['data_dir'])
+    train_dir = sample_data_dir / "train"
+    val_dir = sample_data_dir / "val"
+    test_dir = sample_data_dir / "test"
+    
+    has_splits = (train_dir.exists() and train_dir.is_dir()) or \
+                 (val_dir.exists() and val_dir.is_dir()) or \
+                 (test_dir.exists() and test_dir.is_dir())
+    
+    if has_splits:
+        # Structure: data_dir/train/sub_category/images
+        split_data = {"train": {}, "val": {}, "test": {}}
+        
+        for parent_category, config in class_dict.items():
+            data_dir = Path(config['data_dir'])
+            sub_categories = config.get('sub_categories', [parent_category])
+            
+            parent_split_counts = {"train": 0, "val": 0, "test": 0}
+            
+            # For each split, check if subcategories exist
+            for split_name in ["train", "val", "test"]:
+                split_path = data_dir / split_name
+                if not split_path.exists():
+                    continue
+                
+                # Count images in all subcategories for this parent category
+                for sub_cat in sub_categories:
+                    sub_cat_path = split_path / sub_cat
+                    if not sub_cat_path.exists():
+                        continue
+                    
+                    images = find_images_in_category(sub_cat_path, images_subdir, allowed_exts)
+                    parent_split_counts[split_name] += len(images)
+            
+            # Add counts to split_data
+            for split_name, count in parent_split_counts.items():
+                if count > 0:
+                    split_data[split_name][parent_category] = count
+        
+        # Remove empty splits
+        result = {k: v for k, v in split_data.items() if v}
+        return "train_val", result
+    
+    else:
+        # Structure: data_dir/sub_category/images (no splits)
+        category_data = {}
+        
+        for parent_category, config in class_dict.items():
+            data_dir = Path(config['data_dir'])
+            sub_categories = config.get('sub_categories', [parent_category])
+            
+            parent_total = 0
+            
+            for sub_cat in sub_categories:
+                sub_cat_path = data_dir / sub_cat
+                if not sub_cat_path.exists():
+                    continue
+                
+                images = find_images_in_category(sub_cat_path, images_subdir, allowed_exts)
+                parent_total += len(images)
+            
+            if parent_total > 0:
+                category_data[parent_category] = parent_total
+        
+        return "categories", category_data
+
+
 def analyze_dataset_structure(dataset_path: Path, images_subdir: str = "images") -> Tuple[str, Dict]:
     """
     Analyze dataset structure and return type and statistics.
@@ -231,12 +371,28 @@ def format_config_section(config: Dict) -> str:
     return "\n".join(lines)
 
 
-def format_data_summary(structure_type: str, data: Dict, dataset_path: Path, config: Optional[Dict] = None) -> str:
+def format_data_summary(structure_type: str, data: Dict, dataset_path=None, config: Optional[Dict] = None, class_dict: Optional[Dict] = None) -> str:
     """Format the data summary section for notes.md."""
     lines = []
     lines.append("## Configuration Summary")
     lines.append("")
-    lines.append(f"**Dataset Path:** `{dataset_path}`")
+    
+    # Handle dataset paths
+    if class_dict:
+        # Extract unique data directories from class_dict
+        data_dirs = set()
+        for class_config in class_dict.values():
+            data_dirs.add(str(Path(class_config['data_dir']).resolve()))
+        
+        if len(data_dirs) == 1:
+            lines.append(f"**Dataset Path:** `{list(data_dirs)[0]}`")
+        else:
+            lines.append("**Dataset Paths:**")
+            for data_dir in sorted(data_dirs):
+                lines.append(f"- `{data_dir}`")
+    elif dataset_path:
+        lines.append(f"**Dataset Path:** `{dataset_path}`")
+    
     lines.append("")
     
     # Add config section if available
@@ -260,11 +416,15 @@ def format_data_summary(structure_type: str, data: Dict, dataset_path: Path, con
         lines.append("| Split | Images | Percentage |")
         lines.append("|-------|--------|------------|")
         
-        for split_name in ["train", "val", "test"]:
-            if split_name in split_totals:
-                count = split_totals[split_name]
-                percentage = (count / overall_total * 100) if overall_total > 0 else 0
-                lines.append(f"| {split_name.capitalize()} | {count:,} | {percentage:.1f}% |")
+        # Sort splits to show in a consistent order: train, val, test, synth, then others
+        split_order = ["train", "val", "test", "synth"]
+        sorted_splits = [s for s in split_order if s in split_totals]
+        sorted_splits.extend([s for s in sorted(split_totals.keys()) if s not in split_order])
+        
+        for split_name in sorted_splits:
+            count = split_totals[split_name]
+            percentage = (count / overall_total * 100) if overall_total > 0 else 0
+            lines.append(f"| {split_name.capitalize()} | {count:,} | {percentage:.1f}% |")
         
         lines.append(f"| **Total** | **{overall_total:,}** | **100.0%** |")
         lines.append("")
@@ -273,10 +433,7 @@ def format_data_summary(structure_type: str, data: Dict, dataset_path: Path, con
         lines.append("### Category Distribution")
         lines.append("")
         
-        for split_name in ["train", "val", "test"]:
-            if split_name not in data:
-                continue
-            
+        for split_name in sorted_splits:
             categories = data[split_name]
             split_total = split_totals[split_name]
             
@@ -512,6 +669,144 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
             print(f"Created new notes.md with Configuration Summary: {notes_path}")
 
 
+
+def generate_data_summary_from_config(
+    config_path: Path,
+    data_dict: List[Dict] = None,
+    images_subdir: str = "images",
+    verbose: bool = True
+) -> Path:
+    """
+    Generate or update configuration summary in notes.md file from a config file.
+    
+    This function reads a config file with class definitions and analyzes datasets
+    based on the data_dir and sub_categories for each class, OR uses a provided
+    data_dict to generate the summary.
+    
+    Args:
+        config_path: Path to the config.json file
+        data_dict: Optional list of dicts with 'filepath', 'class', 'split' keys (default: None)
+                   If provided, will use this instead of scanning filesystem
+        images_subdir: Name of images subdirectory within categories (default: "images")
+        verbose: Print progress messages (default: True)
+    
+    Returns:
+        Path to the generated/updated notes.md file
+    
+    Raises:
+        FileNotFoundError: If config_path doesn't exist
+        ValueError: If no images found in dataset or invalid config format
+    
+    Example:
+        from src.summarize_training.generate_config_summary import generate_data_summary_from_config
+        
+        # Generate summary from config
+        notes_path = generate_data_summary_from_config(
+            config_path=Path("/path/to/config.json")
+        )
+        
+        # Or from data_dict
+        notes_path = generate_data_summary_from_config(
+            config_path=Path("/path/to/config.json"),
+            data_dict=[{'filepath': '/path/img.png', 'class': 'wood', 'split': 'train'}, ...]
+        )
+    """
+    # Load config
+    config_path = Path(config_path).resolve()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file does not exist: {config_path}")
+    
+    cfg = load_config(config_path)
+    if not cfg:
+        raise ValueError(f"Failed to load config from: {config_path}")
+    
+    comment = cfg["logging"]["comment"] if "logging" in cfg and "comment" in cfg["logging"] else ""
+    
+    output_path = str(Path(cfg["logging"]["output_dir"]) / "notes.md") if "logging" in cfg and "output_dir" in cfg["logging"] else None
+    
+    # Extract class_dict from config
+    if "data" not in cfg or "classes" not in cfg["data"]:
+        raise ValueError(f"Config file must contain 'data.classes' section: {config_path}")
+    
+    class_dict = cfg["data"]["classes"]
+    
+    if not class_dict:
+        raise ValueError(f"No classes defined in config: {config_path}")
+    
+    # Set default output path (same directory as config)
+    if output_path is None:
+        output_path = config_path.parent / "notes.md"
+    output_path = Path(output_path).resolve()
+    
+    # Analyze dataset structure
+    if data_dict is not None:
+        # Use provided data_dict
+        if verbose:
+            print(f"Analyzing dataset from provided data_dict")
+            print(f"Found {len(data_dict)} total samples")
+        
+        structure_type, data = analyze_data_dict(data_dict)
+        
+        # Extract unique data directories from data_dict filepaths for display
+        unique_dirs = set()
+        for item in data_dict:
+            filepath = Path(item['filepath'])
+            # Try to find the data directory (usually 2-3 levels up from image)
+            parts = filepath.parts
+            for i, part in enumerate(parts):
+                if part in ['train', 'val', 'test', 'synth']:
+                    if i > 0:
+                        unique_dirs.add(str(Path(*parts[:i])))
+                    break
+        
+        # If we couldn't extract dirs from paths, fall back to class_dict
+        if not unique_dirs:
+            unique_dirs = {class_config['data_dir'] for class_config in class_dict.values() if 'data_dir' in class_config}
+    else:
+        # Scan filesystem using class_dict
+        if verbose:
+            print(f"Analyzing datasets from config: {config_path}")
+            print(f"Found {len(class_dict)} classes: {', '.join(class_dict.keys())}")
+        
+        # Validate that all data_dirs exist
+        for parent_category, class_config in class_dict.items():
+            if "data_dir" not in class_config:
+                raise ValueError(f"Missing 'data_dir' for class '{parent_category}'")
+            
+            data_dir = Path(class_config["data_dir"])
+            if not data_dir.exists():
+                raise FileNotFoundError(f"Data directory does not exist for class '{parent_category}': {data_dir}")
+        
+        structure_type, data = analyze_dataset_from_config(class_dict, images_subdir)
+    
+    if not data:
+        raise ValueError(f"No images found in any dataset")
+    
+    if verbose:
+        print(f"Detected structure: {structure_type}")
+        total_images = 0
+        if structure_type == "train_val":
+            for split_name, categories in data.items():
+                split_total = sum(categories.values())
+                total_images += split_total
+                print(f"  {split_name}: {split_total:,} images across {len(categories)} categories")
+        else:
+            total_images = sum(data.values())
+            print(f"  Total: {total_images:,} images across {len(data)} categories")
+    
+    # Format data summary with class_dict for multiple dataset paths
+    data_summary = format_data_summary(structure_type, data, dataset_path=None, config=cfg, class_dict=class_dict)
+    
+    # Update or create notes.md (use first data_dir for legacy dataset_path parameter)
+    first_data_dir = Path(list(class_dict.values())[0]['data_dir']) if 'data_dir' in list(class_dict.values())[0] else Path(output_path).parent
+    update_or_create_notes(output_path, data_summary, first_data_dir, comment, verbose)
+    
+    if verbose:
+        print(f"✓ Configuration summary generated successfully: {output_path}")
+    
+    return output_path
+
+
 def generate_data_summary(
     dataset_path: Path,
     output_path: Path = None,
@@ -606,22 +901,30 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate summary in current directory
+  # Generate summary from config file
+  python generate_config_summary.py --config /path/to/config.json
+  
+  # Generate summary from dataset directory (legacy)
   python generate_config_summary.py --dataset /path/to/dataset
   
   # Specify output location
-  python generate_config_summary.py --dataset /path/to/dataset --output training/notes.md
+  python generate_config_summary.py --config /path/to/config.json --output training/notes.md
   
   # Use custom images subfolder name
-  python generate_config_summary.py --dataset /path/to/dataset --images-subdir imgs
+  python generate_config_summary.py --config /path/to/config.json --images-subdir imgs
         """
+    )
+    
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to config.json file (preferred method)"
     )
     
     parser.add_argument(
         "--dataset",
         type=Path,
-        required=True,
-        help="Path to dataset directory"
+        help="Path to dataset directory (legacy method, use --config instead)"
     )
     
     parser.add_argument(
@@ -629,7 +932,7 @@ Examples:
         "-o",
         type=Path,
         default=None,
-        help="Output path for notes.md file (default: ./notes.md)"
+        help="Output path for notes.md file (default: ./notes.md or config directory)"
     )
     
     parser.add_argument(
@@ -637,6 +940,14 @@ Examples:
         type=str,
         default="images",
         help="Name of images subdirectory within categories (default: images)"
+    )
+    
+    parser.add_argument(
+        "--comment",
+        "-c",
+        type=str,
+        default="",
+        help="Comment to add to 'Why was this model trained?' section"
     )
     
     parser.add_argument(
@@ -659,12 +970,27 @@ Examples:
     try:
         verbose = args.verbose and not args.quiet
         
-        generate_data_summary(
-            dataset_path=args.dataset,
-            output_path=args.output,
-            images_subdir=args.images_subdir,
-            verbose=verbose
-        )
+        # Validate arguments
+        if not args.config and not args.dataset:
+            parser.error("Either --config or --dataset must be provided")
+        
+        if args.config and args.dataset:
+            parser.error("Cannot use both --config and --dataset, use --config for the new workflow")
+        
+        # Use config-based analysis if config is provided
+        if args.config:
+            generate_data_summary_from_config(
+                config_path=args.config
+            )
+        else:
+            # Legacy dataset-based analysis
+            generate_data_summary(
+                dataset_path=args.dataset,
+                output_path=args.output,
+                images_subdir=args.images_subdir,
+                comment=args.comment,
+                verbose=verbose
+            )
         
     except KeyboardInterrupt:
         print("\n\nInterrupted by user.", file=sys.stderr)
@@ -681,3 +1007,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
+

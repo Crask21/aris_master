@@ -1,1 +1,41 @@
-{"hyperparameters": {"batch_size": 16, "epochs": 5, "learning_rate": 0.0001, "dataloader_num_workers": 4}, "logging": {"logger": "tensorboard", "output_dir": "/home/ap/cloud/Master/aris_master/testing/testing_dir", "comment": "Bla. bla. bla.", "checkpointing_steps": 1, "resume_from_checkpoint": true, "checkpoint_dir": "/home/ap/cloud/Master/aris_master/testing/testing_dir/resnet18/resnet18_epoch5_valacc50.53_val_loss1.5397.ckpt"}, "data": {"resolution": 128, "center_crop": true, "random_flip": true, "real_image_count": 200, "synthetic_image_count": 1000, "synthetic_data_dir": null, "classes": {"impregnated_wood": {"data_dir": "/home/ap/cloud/Master/dataset/wood", "sub_categories": ["impregnated_wood", "impregnated_wood_painted", "outdoor_wood", "outdoor_wood_painted"]}, "normal_wood": {"data_dir": "/home/ap/cloud/Master/dataset/wood", "sub_categories": ["normal_wood"]}}}}
+{
+    "hyperparameters": {
+        "batch_size": 16,
+        "epochs": 5,
+        "learning_rate": 0.0001,
+        "dataloader_num_workers": 4
+    },
+    "logging": {
+        "logger": "tensorboard",
+        "output_dir": "testing/testing_dir",
+        "comment": "Bla. bla. bla.",
+        "checkpointing_steps": 1,
+        "resume_from_checkpoint": true,
+        "checkpoint_dir": "testing/testing_dir/resnet18/resnet18_epoch5_valacc45.25_val_loss0.7205.ckpt"
+    },
+    "data": {
+        "resolution": 128,
+        "center_crop": true,
+        "random_flip": true,
+        "real_image_count": 200,
+        "synthetic_image_count": null,
+        "synthetic_data_dir": null,
+        "classes": {
+            "impregnated_wood": {
+                "data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories",
+                "sub_categories": [
+                    "impregnated_wood",
+                    "impregnated_wood_painted",
+                    "outdoor_wood",
+                    "outdoor_wood_painted"
+                ]
+            },
+            "normal_wood": {
+                "data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories",
+                "sub_categories": [
+                    "normal_wood"
+                ]
+            }
+        }
+    }
+}
