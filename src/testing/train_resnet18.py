@@ -2,11 +2,14 @@
 #                                    Imports                                   #
 # ---------------------------------------------------------------------------- #
 import json
+from random import random
 import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+# Import resnet18 weights enum
+from torchvision.models import ResNet18_Weights
 import torchvision
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
@@ -23,7 +26,6 @@ from pathlib import Path
 
 # Import parse args
 from argparse import ArgumentParser
-# --------------------------------- AP NOTES --------------------------------- #
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 try:
     from src.summarize_training.generate_config_summary import generate_data_summary_from_config
@@ -33,16 +35,15 @@ except ImportError as e:
     print("Make sure you have the 'src/summarize_training' folder.", file=sys.stderr)
     evaluate_resnet18 = None
     pass
-# ------------------------------- AP NOTES END ------------------------------- #
 
 def load_resnet18(num_classes):
-    model = torchvision.models.resnet18(pretrained=False)
+    model = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
 
 class ResNet18Test:
-    def __init__(self, config_path):
+    def __init__(self, config_path, resnet_dataloader: ResNetDataloader=None, output_dir=None):
         self.config_path = config_path
         print(f"Loading config from: {config_path}")
         
@@ -54,15 +55,17 @@ class ResNet18Test:
         self.learning_rate = self.config["hyperparameters"]["learning_rate"]
         self.weight_decay = 0.0005
         
-        self.output_dir = self.config["logging"]["output_dir"] + "/resnet18/"
+        self.seed = self.config["logging"]["seed"]
+        
+        self.output_dir = output_dir if output_dir is not None else self.config["logging"]["output_dir"] + "/resnet18/"
         # Create output directory if it doesn't exist
         os.makedirs(self.output_dir, exist_ok=True)
         
         # Load data
-        self.load_data()
+        self.load_data(resnet_dataloader)
         
         # Load model 
-        self.model = torchvision.models.resnet18(pretrained=True)
+        self.model = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
         self.model.fc = nn.Linear(self.model.fc.in_features, self.num_classes)
         
         # Loss function, optimizer, device
@@ -99,6 +102,15 @@ class ResNet18Test:
                 self.best_val_acc = max(self.log_val_acc)
                 self.lowest_val_loss = min(self.log_val_loss)
                 print(f"Resuming training from epoch {self.start_epoch}. Best val acc so far: {self.best_val_acc:.2f}%")
+                
+    def set_seed(seed=42):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        # For reproducibility (may impact performance)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
         
     def train(self):
         writer = SummaryWriter(self.output_dir)
@@ -213,8 +225,6 @@ class ResNet18Test:
             elapsed_time = time.time() - start_time
             avg_time_per_epoch = elapsed_time / (epoch + 1)
             remaining_time = avg_time_per_epoch * (self.num_epochs - epoch - 1)
-            # Remaining time in minutes
-            remaining_time_minutes = remaining_time / 60
             # remaining time in hh:mm:ss format
             remaining_time_hms = time.strftime("%H:%M:%S", time.gmtime(remaining_time))
             # Estimated time that the model is expected to finish training
@@ -224,12 +234,12 @@ class ResNet18Test:
         writer.close()
         
     def load_resnet18(self, num_classes):
-        model = torchvision.models.resnet18(pretrained=False)
+        model = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
         return model
         
-    def load_data(self):
-        self.waste_dataloader = ResNetDataloader(self.config_path)
+    def load_data(self, resnet_dataloader: ResNetDataloader = None):
+        self.waste_dataloader = resnet_dataloader if resnet_dataloader is not None else ResNetDataloader(self.config_path)
         self.train_loader = self.waste_dataloader.train_loader
         self.val_loader = self.waste_dataloader.val_loader
         self.class_names = self.waste_dataloader.classes
@@ -241,8 +251,9 @@ class ResNet18Test:
 if __name__ == "__main__":
     # Load config
     parser = ArgumentParser()
-    parser.add_argument("--config", default="testing/testing_dir/config.json", help="Path to config file")
+    parser.add_argument("--config", default="src/testing/testing_config.json", help="Path to config file")
     parser.add_argument("--evaluate", action="store_true", help="Run evaluation on test/validation set after training")
+    # arg = ["--config", "src/testing/testing_config.json", "--evaluate"]
     args = parser.parse_args()
     config_path = args.config
     resnet_trainer = ResNet18Test(config_path)
@@ -257,13 +268,14 @@ if __name__ == "__main__":
             # Use the best validation accuracy checkpoint
             best_checkpoint = os.path.join(resnet_trainer.output_dir, "resnet18_best_val_acc.ckpt")
             if os.path.exists(best_checkpoint):
-                evaluate_resnet18(config_path=config_path, checkpoint_path=best_checkpoint)
+                evaluate_resnet18(dataloader=resnet_trainer.waste_dataloader, checkpoint_dir=resnet_trainer.output_dir, best_checkpoint="lowest_val_loss")
             else:
                 print("[WARNING] Best checkpoint not found, skipping evaluation")
         except Exception as e:
             print(f"[ERROR] Evaluation failed: {e}")
             import traceback
             traceback.print_exc()
+            sys.exit(1)
     elif args.evaluate:
         print("[WARNING] Evaluation not available, evaluate_resnet18 could not be imported")
 

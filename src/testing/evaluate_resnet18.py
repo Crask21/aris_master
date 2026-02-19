@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 from tqdm import tqdm
+from torch.utils.data import DataLoader
 from argparse import ArgumentParser
 from sklearn.metrics import (
     confusion_matrix,
@@ -21,7 +22,7 @@ from sklearn.metrics import (
     accuracy_score,
     precision_recall_fscore_support
 )
-
+from typing import overload
 from resnet_dataloader import ResNetDataloader
 
 
@@ -250,32 +251,18 @@ def save_classification_report(results, output_path):
         output_path: Path to save classification report
     """
     class_names = results["class_names"]
+
     report = classification_report(
         results["labels"],
         results["predictions"],
         target_names=class_names,
-        digits=4
+        digits=4,
+        output_dict=True
     )
-    
-    with open(output_path, 'w') as f:
-        f.write("Classification Report\n")
-        f.write("=" * 80 + "\n\n")
-        f.write(report)
-        f.write("\n\n")
-        f.write("Overall Metrics\n")
-        f.write("-" * 80 + "\n")
-        f.write(f"Accuracy:  {results['accuracy']*100:.2f}%\n")
-        f.write(f"Precision: {results['precision']:.4f}\n")
-        f.write(f"Recall:    {results['recall']:.4f}\n")
-        f.write(f"F1 Score:  {results['f1']:.4f}\n")
-    
-    print(f"[INFO] Classification report saved to: {output_path}")
-    print("\n" + "=" * 80)
-    print(report)
-    print("=" * 80)
+    return report
 
 
-def evaluate_resnet18(config_path, checkpoint_path=None, output_dir=None):
+def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output_dir=None):
     """
     Main evaluation function that can be called programmatically.
     
@@ -333,12 +320,109 @@ def evaluate_resnet18(config_path, checkpoint_path=None, output_dir=None):
     print(f"\n[INFO] Saving results to: {output_dir}")
     save_predictions_csv(results, os.path.join(output_dir, f"predictions_{split_name}.csv"))
     save_confusion_matrix(results, os.path.join(output_dir, f"confusion_matrix_{split_name}.png"))
-    save_classification_report(results, os.path.join(output_dir, f"classification_report_{split_name}.txt"))
+    classification_report_dict = save_classification_report(results, os.path.join(output_dir, f"classification_report_{split_name}.txt"))
     
     # Save summary JSON
     summary = {
         "split": split_name,
         "checkpoint": checkpoint_path,
+        "num_samples": len(results["labels"]),
+        "num_classes": num_classes,
+        "class_names": class_names,
+        "accuracy": float(results["accuracy"]),
+        "precision": float(results["precision"]),
+        "recall": float(results["recall"]),
+        "f1_score": float(results["f1"]),
+        "classification_report": classification_report_dict
+    }
+    
+    summary_path = os.path.join(output_dir, f"evaluation_summary_{split_name}.json")
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=4)
+    print(f"[INFO] Evaluation summary saved to: {summary_path}")
+    
+    print("\n✓ Evaluation complete!")
+    return results
+
+
+
+def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpoint="lowest_val_loss", output_dir=None, split_name="val"):
+    """
+    Main evaluation function that can be called programmatically.
+    
+    Args:
+        dataloader: The dataloader instance to use for evaluation
+        checkpoint_path: Path to model checkpoint (optional, will use config if None)
+        output_dir: Output directory for results (optional, will use config if None)
+        best_checkpoint: Which checkpoint to use if multiple are available ("lowest_val_loss", "highest_val_acc", or a specific epoch number)
+    Returns:
+        results: Dictionary containing all evaluation results and metrics
+    """
+    # Load config
+
+    
+    # Set checkpoint path from config if not provided
+    # Check if checkpoint_path exists, if not try to find checkpoint in config logging directory
+    if checkpoint_dir is not None:
+        
+        if not os.path.exists(checkpoint_dir):
+            raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_dir}")
+        
+        if best_checkpoint is not None:
+            if best_checkpoint not in ["lowest_val_loss", "highest_val_acc"] and not isinstance(best_checkpoint, int):
+                raise ValueError(f"Invalid best_checkpoint value: {best_checkpoint}. Must be 'lowest_val_loss', 'highest_val_acc', or an integer epoch number.")
+            elif best_checkpoint == "lowest_val_loss":
+                checkpoint_path = Path(checkpoint_dir) / "resnet18_lowest_val_loss.ckpt"
+            elif best_checkpoint == "highest_val_acc":
+                checkpoint_path = Path(checkpoint_dir) / "resnet18_best_val_acc.ckpt"
+            else:
+                checkpoint_path = Path(checkpoint_dir) / f"resnet18_epoch_{best_checkpoint}.ckpt"
+        else:
+            checkpoint_path = Path(checkpoint_dir) / "resnet18_lowest_val_loss.ckpt"    
+    
+    if output_dir is None:
+        output_dir = os.path.join(checkpoint_dir, "evaluation")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Setup device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Using device: {device}")
+    
+    
+    # Get test loader (or validation as fallback)
+    if split_name == "test":
+        test_loader = dataloader.test_loader
+    else:
+        test_loader = dataloader.val_loader
+    
+    class_names = dataloader.classes
+    num_classes = dataloader.num_classes
+    
+    # Load model
+    model, checkpoint = load_model(checkpoint_path, num_classes, device)
+    
+    # Print checkpoint info
+    if "epoch" in checkpoint:
+        print(f"[INFO] Loaded checkpoint from epoch {checkpoint['epoch'] + 1}")
+    if "val_acc" in checkpoint and len(checkpoint["val_acc"]) > 0:
+        print(f"[INFO] Best validation accuracy during training: {max(checkpoint['val_acc']):.2f}%")
+    
+    # Evaluate model
+    results = evaluate_model(model, test_loader, device, class_names)
+    results["split_name"] = split_name
+    results["checkpoint_path"] = checkpoint_path
+    # results["config_path"] = config_path
+    
+    # Save results
+    print(f"\n[INFO] Saving results to: {output_dir}")
+    save_predictions_csv(results, os.path.join(output_dir, f"predictions_{split_name}.csv"))
+    save_confusion_matrix(results, os.path.join(output_dir, f"confusion_matrix_{split_name}.png"))
+    save_classification_report(results, os.path.join(output_dir, f"classification_report_{split_name}.txt"))
+    
+    # Save summary JSON
+    summary = {
+        "split": split_name,
+        "checkpoint": str(checkpoint_path),
         "num_samples": len(results["labels"]),
         "num_classes": num_classes,
         "class_names": class_names,
@@ -356,7 +440,14 @@ def evaluate_resnet18(config_path, checkpoint_path=None, output_dir=None):
     print("\n✓ Evaluation complete!")
     return results
 
-
+def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
+    """
+    Evaluate multiple ResNet18 runs in a directory and aggregate results.
+    
+    Args:
+        resnet18_runs_dir: Directory containing subdirectories for each run (each with a checkpoint and config)
+        output_dir: Directory to save aggregated results (optional, will create 'multi_run_evaluation' in output dir if not provided)
+        """
 # ---------------------------------------------------------------------------- #
 #                                     Main                                     #
 # ---------------------------------------------------------------------------- #
@@ -365,7 +456,8 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        required=True,
+        default=None,
+        #required=True,
         help="Path to config JSON file"
     )
     parser.add_argument(
@@ -380,15 +472,24 @@ def main():
         default=None,
         help="Output directory for evaluation results (optional, will use config output_dir/evaluation if not provided)"
     )
+    parser.add_argument(
+        "--resnet18-runs-dir",
+        type=str,
+        default=None,
+        help="Directory containing resnet18 runs."
+    )
     
     args = parser.parse_args()
     
     try:
-        results = evaluate_resnet18(
-            config_path=args.config,
-            checkpoint_path=args.checkpoint,
-            output_dir=args.output_dir
-        )
+        if args.config or args.checkpoint:
+            results = evaluate_resnet18_from_config(
+                config_path=args.config,
+                checkpoint_path=args.checkpoint,
+                output_dir=args.output_dir
+            )
+        elif args.resnet18_runs_dir:
+            multi_run_evaluation(resnet18_runs_dir=args.resnet18_runs_dir, output_dir=args.output_dir)
     except Exception as e:
         print(f"[ERROR] Evaluation failed: {e}")
         import traceback

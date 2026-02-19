@@ -485,6 +485,9 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
     else:
         notes_path = output_path
     
+    # Ensure parent directory exists before writing
+    notes_path.parent.mkdir(parents=True, exist_ok=True)
+    
     if notes_path.exists():
         # Read existing content
         content = notes_path.read_text(encoding="utf-8")
@@ -651,6 +654,7 @@ def update_or_create_notes(output_path: Path, data_summary: str, dataset_path: P
             print(f"WARNING: Template not found at {template_path}, using fallback template", file=sys.stderr)
             exit 
             current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Create the notes.md content with the data summary and comment
             new_content = f"""# Model Training Notes
 
 **Creation:** {current_date}

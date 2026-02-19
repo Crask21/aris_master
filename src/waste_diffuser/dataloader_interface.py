@@ -42,14 +42,14 @@ class dataloaderInterface:
                 
         # Initialize config as json object
         with open(config, 'r') as f:            
-            config = json.load(f)
-            self.data_config = config["data"]
+            self.config = json.load(f)
+            self.data_config = self.config["data"]
                
         # Set parameters from config file if not provided as arguments
         if output_dir is None:
-            self.output_dir = config["logging"]["output_dir"]
+            self.output_dir = self.config["logging"]["output_dir"]
         if batch_size is None:
-            self.batch_size = config["hyperparameters"]["batch_size"]
+            self.batch_size = self.config["hyperparameters"]["batch_size"]
         if num_workers is None:
             self.num_workers = config["hyperparameters"]["dataloader_num_workers"]
         if vae_latents is None:
@@ -77,7 +77,7 @@ class dataloaderInterface:
         # Save config file to output directory
         self.output_config_path = os.path.join(self.output_dir, "config.json")
         with open(self.output_config_path, 'w') as f:
-            json.dump(config, f, indent=4)
+            json.dump(self.config, f, indent=4)
         
         print(f"[INFO] Config file saved to {self.output_config_path}")
         
