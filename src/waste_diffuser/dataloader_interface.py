@@ -26,7 +26,8 @@ class dataloaderInterface:
                  preview: bool = True, 
                  batch_size: int = None, 
                  num_workers: int = None,
-                 synthetic: bool = False):
+                 synthetic: bool = False,
+                 vae_latents: bool = None):
         
         self.config_path = config
         self.output_dir = output_dir
@@ -37,6 +38,7 @@ class dataloaderInterface:
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.synthetic = synthetic
+        self.vae_latents = vae_latents
                 
         # Initialize config as json object
         with open(config, 'r') as f:            
@@ -50,6 +52,8 @@ class dataloaderInterface:
             self.batch_size = config["hyperparameters"]["batch_size"]
         if num_workers is None:
             self.num_workers = config["hyperparameters"]["dataloader_num_workers"]
+        if vae_latents is None:
+            self.vae_latents = config["vae"]["use_vae"]
             
         # Set classes and number of classes from config file
         self.classes = list(self.data_config["classes"].keys())
@@ -104,12 +108,20 @@ class dataloaderInterface:
                 sub_category_path = os.path.join(data_dir, sub_category)
                 # Look globally in the folder in recursive way for .png files
                 for root, dirs, files in os.walk(sub_category_path):
-                    for file in files:
-                        if file.endswith(".png"):
-                            
-                            image_file = os.path.join(root, file)
-                            sample = {"filepath": image_file, "class": category, "split": split}
-                            data_dict.append(sample)  
+                    if self.vae_latents == True:
+                        if root.endswith(f"latents_{self.resolution}"):
+                            for file in files:
+                                if file.endswith(".pt"):
+                                    latent_file = os.path.join(root, file)
+                                    sample = {"filepath": latent_file, "class": category, "split": split}
+                                    data_dict.append(sample)
+                    else:
+                        for file in files:
+                            if file.endswith(".png"):
+                                
+                                image_file = os.path.join(root, file)
+                                sample = {"filepath": image_file, "class": category, "split": split}
+                                data_dict.append(sample)  
         return data_dict
 
 
@@ -122,6 +134,14 @@ class dataloaderInterface:
             processed.append(self.augmentations(image.convert("RGB")))
         class_indices = [self.class_LUT[cls] for cls in examples["class"]]
         return {"image": processed, "class": class_indices}
+    
+    def load_latent(self, examples):
+        latents = []
+        for filepath in examples["filepath"]:
+            latent = torch.load(filepath)
+            latents.append(latent)
+        class_indices = [self.class_LUT[cls] for cls in examples["class"]]
+        return {"image": latents, "class": class_indices}
     
 # ------------------------------ Get dataloader ------------------------------ #
     def get_dataloader(self, split="train"):
@@ -151,27 +171,36 @@ class dataloaderInterface:
         else:
             raise ValueError("Invalid split. Must be 'train' or 'val'.")
         
-        # --- Define augmentations --- #
-        # Preprocessing the datasets and DataLoaders creation.
-        spatial_augmentations = [
-            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
-            transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
-        ]
-
-        self.augmentations = transforms.Compose(
-            spatial_augmentations
-            + [
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
+        if not self.vae_latents:
+            print(f"[INFO] Using image dataset with resolution {self.resolution} and augmentations: center_crop={self.center_crop}, random_flip={self.random_flip}")
+            # --- Define augmentations --- #
+            # Preprocessing the datasets and DataLoaders creation.
+            spatial_augmentations = [
+                transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
+                transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
             ]
-        )
-                  
-        dataset.set_transform(self.transform_images)
-        self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
-        if self.preview == True:
-            self.preview_dataloader(self.dataloader)
-            self.print_dataset_summary(data_dict)
+
+            self.augmentations = transforms.Compose(
+                spatial_augmentations
+                + [
+                    transforms.ToTensor(),
+                    transforms.Normalize([0.5], [0.5]),
+                ]
+            )
+                    
+            dataset.set_transform(self.transform_images)
+            self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
+            if self.preview == True:
+                self.preview_dataloader(self.dataloader)
+                self.print_dataset_summary(data_dict)
+        else:
+            print(f"[INFO] Using VAE latent dataset with resolution {self.resolution}")
+            # For VAE latents, we don't need to apply augmentations, but we still need to load the data and create a dataloader
+            
+            
+            dataset.set_transform(self.load_latent)
+            self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
         return self.dataloader
         
         
