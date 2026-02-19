@@ -48,7 +48,7 @@ class ResNetDataloader(dataloaderInterface):
         self.seed = np.random.randint(0, 100000)
         print(f"[INFO] Random seed for this run: {self.seed}")
         
-        super().__init__(config_path) 
+        super().__init__(config_path,preview=False) 
         
         
 
@@ -99,9 +99,9 @@ class ResNetDataloader(dataloaderInterface):
             category_images = []
             for sub_category in all_sub_categories:
                 # [Assertion] Assert that the sub-category exists
-                if not Path(data_dir + "/" + sub_category).exists():
-                    print(f"[WARNING] Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
-                    continue
+                if not Path(data_dir + "/" + sub_category).exists() or (split == "synth" and not Path(data_dir + "/" + category).exists()):
+                    print(f"[ERROR] Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
+                    sys.exit(1)
                 
                 # Find all .png files in the data_dir directory for the sub-category
                 sub_category_path = os.path.join(data_dir, sub_category)
