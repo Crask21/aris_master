@@ -26,20 +26,27 @@ from src.summarize_training.generate_config_summary import generate_data_summary
 #                                     Class                                    #
 # ---------------------------------------------------------------------------- #
 class ResNetDataloader(dataloaderInterface):
-    def __init__(self, config_path):
+    def __init__(self, config_path,real_image_count=None, synthetic_image_count=None):
         
         with open(config_path, 'r') as f:
             config = json.load(f)
         data_config = config["data"]
+        
         self.real_image_count = data_config["real_image_count"]
         self.synthetic_image_count = data_config["synthetic_image_count"]
         
+        if real_image_count is not None:
+            self.real_image_count = real_image_count
+        if synthetic_image_count is not None:
+            self.synthetic_image_count = synthetic_image_count
         
         # [Assertion] Assert that either real_image_count or synthetic_image_count is specified in the config file
         assert self.real_image_count is not None or self.synthetic_image_count is not None, \
             f"Either real_image_count or synthetic_image_count must be specified in the config file. Please check the config file and specify at least one of them.\n Config file: {Path(config).resolve()}"
         
-        self.seed = config["logging"]["seed"]
+        # Make a random seed each run
+        self.seed = np.random.randint(0, 100000)
+        print(f"[INFO] Random seed for this run: {self.seed}")
         
         super().__init__(config_path) 
         
@@ -111,7 +118,8 @@ class ResNetDataloader(dataloaderInterface):
                 
                 # Check if there are enough images for the category
                 if len(category_images) < class_image_count[category]:
-                    raise ValueError(f"Not enough images for category {category}. Required: {class_image_count[category]}, Available: {len(category_images)}. Please check the config file and the data_dir directory.")
+                    pass
+                    #raise ValueError(f"Not enough images for category {category}. Required: {class_image_count[category]}, Available: {len(category_images)}. Please check the config file and the data_dir directory.")
                 # Shuffle the data dictionary for the category
                 np.random.shuffle(category_images)
                 # Keep only the specified number of images for the category

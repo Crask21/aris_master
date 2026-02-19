@@ -20,11 +20,12 @@ from sklearn.metrics import (
 )
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+
 from src.utils.pushover import send_notification
 from evaluate_resnet18 import evaluate_resnet18
 from resnet_dataloader import ResNetDataloader
 from train_resnet18 import ResNet18Test
-
+from multi_run_evaluation import multi_run_evaluation
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Train multiple resnet18 models on different splits of the dataset and evaluate their performance.")
@@ -56,15 +57,17 @@ if __name__ == "__main__":
     # Load splits from config file
     real_image_counts = config["data"]["splits"]["real_image_counts"]
     synthetic_image_counts = config["data"]["splits"]["synthetic_image_counts"]
-    # Combine into a splits tuble
     splits = list(zip(real_image_counts, synthetic_image_counts))
     
-    # Training runs for each split
     training_runs_per_split = config["data"]["training_runs_per_split"]
-    
+
+    # Make 'runs' folder
+    runs_dir = Path(config["logging"]["output_dir"]) / "resnet18_runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)    
     # Start time
     start_time = time.time()
     total_runs = len(splits) * training_runs_per_split
+    split_idx = 0
     for real_count, synthetic_count in splits:
         for run in range(training_runs_per_split):
             if args.train:
@@ -72,7 +75,7 @@ if __name__ == "__main__":
                 # Create dataloader for this split
                 dataloader = ResNetDataloader(config_path, real_image_count=real_count, synthetic_image_count=synthetic_count)  
                 
-                checkpoint_dir = f"{config['logging']['output_dir']}/resnet18_{real_count}-real_{synthetic_count}-synthetic_run{run}/"
+                checkpoint_dir = f"{runs_dir}/{real_count}-real_{synthetic_count}-synthetic_run{run+1}/"
                 
                 # Train model on this split
                 model = ResNet18Test(config_path, resnet_dataloader=dataloader, output_dir=checkpoint_dir)
@@ -83,17 +86,19 @@ if __name__ == "__main__":
                 print(f"\n[INFO] Evaluating model trained on {real_count} real images and {synthetic_count} synthetic images...")
                 dataloader = ResNetDataloader(config_path, real_image_count=real_count, synthetic_image_count=synthetic_count)  
                 
-                checkpoint_dir = f"{config['logging']['output_dir']}/resnet18_{real_count}-real_{synthetic_count}-synthetic_run{run}/"
+                checkpoint_dir = f"{runs_dir}/{real_count}-real_{synthetic_count}-synthetic_run{run+1}/"
                 evaluate_resnet18(dataloader, checkpoint_dir=checkpoint_dir, best_checkpoint="lowest_val_loss")
             
             # -------------------------- Estimate remaining time ------------------------- #
             elapsed_time = time.time() - start_time
-            avg_time_per_epoch = elapsed_time / (total_runs + 1)
-            remaining_time = avg_time_per_epoch * (total_runs - (len(splits) * run + 1))
+            avg_time_per_epoch = elapsed_time / (split_idx*training_runs_per_split + run + 1)
+            remaining_time = avg_time_per_epoch * (total_runs - (len(splits) * training_runs_per_split - split_idx * training_runs_per_split - run - 1))
+            print(f"Elapsed time: {elapsed_time:.2f}s, Average time per run: {avg_time_per_epoch:.2f}s")
             # remaining time in hh:mm:ss format
             remaining_time_hms = time.strftime("%H:%M:%S", time.gmtime(remaining_time))
             # Estimated time that the model is expected to finish training
             estimated_finish_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + remaining_time))
             print(f"[INFO] Estimated remaining time: {remaining_time_hms} (Estimated finish time: {estimated_finish_time})")
             # -------------------------------------------------------------------------- #
+    multi_run_evaluation(resnet18_runs_dir=str(runs_dir))
     send_notification("Multiple splits training and evaluation complete!", "All models have been trained and evaluated on their respective splits.", send_to_casper=False)

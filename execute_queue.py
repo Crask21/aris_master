@@ -106,7 +106,7 @@ def execute_config(config_path: Path):
         return
 
     command = build_command(execution_str, config_path)
-    print_info(f"Command: {command}")
+    print_info(f"Command: {ENDC}{BOLD}{command}")
 
     # Notification flags
     notify_start = queue_settings.get("send_notification_on_start", False)
@@ -152,7 +152,7 @@ def execute_config(config_path: Path):
 
         if process.returncode == 0:
             success = True
-            print_info(f"{config_name} completed in {elapsed_str}")
+            print_info(f"{ENDC}{BOLD}{config_name}{ENDC} completed in {ENDC}{BOLD}{elapsed_str}")
         else:
             print_error(f"{config_name} exited with code {process.returncode} after {elapsed_str}")
 
@@ -207,7 +207,7 @@ def _copy_config_to_output_dir(config_path: Path, output_dir: str):
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / config_path.name
     shutil.copy2(config_path, dest)
-    print_info(f"Config copied to: {dest}")
+    print_info(f"Config copied to: {ENDC}{BOLD}{dest}")
     
 
 
@@ -224,25 +224,54 @@ def _move_to_dir(config_path: Path, target_dir: Path, timestamp: str):
         new_name = f"{timestamp}_{config_path.name}"
     dest = target_dir / new_name
     shutil.move(str(config_path), str(dest))
-    print_info(f"Moved {config_path.name} -> {dest}")
+    print_info(f"Moved {ENDC}{BOLD}{config_path.name}{ENDC}{CYAN} -> {dest}")
 
+def re_run_recent_config():
+    """Find the most recent completed or failed config and ask the user if they want to re-run it."""
+    print_warning("No config files found in queue/. Nothing to do.")
+    recent_completed = list(COMPLETED_DIR.glob("*.json"))
+    recent_failed = list(FAILED_DIR.glob("*.json"))
+    recent_configs = sorted(recent_completed + recent_failed, key=os.path.getmtime, reverse=True)
+    if recent_configs:
+        most_recent = recent_configs[0]
+        print_info(f"Most recent config: {ENDC}{BOLD}{most_recent}{ENDC} (from {'completed' if most_recent in recent_completed else 'failed'})")
+        # Catch KeyboardInterrupt to allow user to cancel if they don't want to be prompted
+        try:
+            response = input("Do you want to re-run this config? (Y/n): ").strip().lower()
+        except KeyboardInterrupt:
+            print_info("Interrupted by user.")
+            return False
+        if not response == "n":
+            # Move the most recent config back to the queue directory
+            shutil.copy2(most_recent, QUEUE_DIR / most_recent.name)
+            print_info(f"Copied {most_recent.name} back to queue/. Please run the script again to execute it.")
+            return True
+        else:
+            print_info("No config will be re-run. Exiting.")
+            # system exit with code 0 to indicate normal exit, even though nothing was done
+            return False
+    else:
+        print_info("No recent configs found in completed/ or failed/. Exiting.")
+        return False
+    
 
 def run_queue():
     """Discover and execute all .json config files in the queue directory."""
     config_files = sorted(QUEUE_DIR.glob("*.json"))
+    
 
     
     if not config_files:
-        print_warning("No config files found in queue/. Nothing to do.")
-        return
+        if re_run_recent_config():
+            config_files = sorted(QUEUE_DIR.glob("*.json"))
+        else:
+            return
     completed_count = 0
     failed_count = 0
     while config_files:
         config_path = config_files[0]  # Always take the first one (sorted by name)
-        print_info(f"Found {len(config_files)} config(s) in queue.")
-        for cf in config_files:
-            print_info(f"  - {cf.name}")
-        print()
+        print_info(f"Found {ENDC}{len(config_files)}{CYAN} config(s) in queue.")
+
         try:
             success = execute_config(config_path)
             if success:
