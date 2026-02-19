@@ -64,6 +64,41 @@ if __name__ == "__main__":
     # Make 'runs' folder
     runs_dir = Path(config["logging"]["output_dir"]) / "resnet18_runs"
     runs_dir.mkdir(parents=True, exist_ok=True)    
+    
+    # Resume run
+    # Check runs_dir for existing runs and determine the last completed run
+    existing_runs = sorted(runs_dir.glob("*-real_*synthetic_run*"))
+    # Extract current split and run from the last completed run
+    if existing_runs:
+        last_run = existing_runs[-1]
+        last_run_name = last_run.name
+        print(f"[INFO] Found existing runs. Last completed run: {last_run_name}")
+        try:
+            last_real_count = int(last_run_name.split("-real_")[0])
+            last_synthetic_count = int(last_run_name.split("-synthetic_run")[0].split("_")[-1])
+            last_run_number = int(last_run_name.split("-synthetic_run")[-1])
+            print(f"[INFO] Last completed split: {last_real_count} real, {last_synthetic_count} synthetic, run {last_run_number}")
+            # Determine the index of the last completed split
+            last_split_idx = splits.index((last_real_count, last_synthetic_count))
+            # Set the starting point for the next run
+            start_split_idx = last_split_idx
+            start_run_number = last_run_number
+            
+            checkpoint_dir = config["logging"]["checkpoint_dir"]
+            # Check if checkpoint_dir is set to the last completed run's checkpoint
+            expected_checkpoint_dir = f"{runs_dir}/{last_real_count}-real_{last_synthetic_count}-synthetic_run{last_run_number}/resnet18_latest.ckpt"
+            # Check if file exists
+            if not Path(expected_checkpoint_dir).exists():
+                print(f"[WARNING] Expected checkpoint directory does not exist: {expected_checkpoint_dir}")
+            if checkpoint_dir != expected_checkpoint_dir:
+                print(f"[WARNING] Checkpoint directory in config does not match expected checkpoint for last completed run. Updating checkpoint directory to: {expected_checkpoint_dir}")
+                print(f"[INFO] Config checkpoint directory: {checkpoint_dir}")
+                print(f"[INFO] Expected checkpoint directory: {expected_checkpoint_dir}")
+                config["logging"]["checkpoint_dir"] = None  # Set to None to avoid loading from an old checkpoint
+        except Exception as e:
+            print(f"[ERROR] Could not parse last run name: {e}")
+            start_split_idx = 0
+            start_run_number = 0
     # Start time
     start_time = time.time()
     total_runs = len(splits) * training_runs_per_split
@@ -76,7 +111,7 @@ if __name__ == "__main__":
                 dataloader = ResNetDataloader(config_path, real_image_count=real_count, synthetic_image_count=synthetic_count)  
                 
                 checkpoint_dir = f"{runs_dir}/{real_count}-real_{synthetic_count}-synthetic_run{run+1}/"
-                
+
                 # Train model on this split
                 model = ResNet18Test(config_path, resnet_dataloader=dataloader, output_dir=checkpoint_dir)
                 model.train()

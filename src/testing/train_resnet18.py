@@ -43,7 +43,7 @@ def load_resnet18(num_classes):
 
 
 class ResNet18Test:
-    def __init__(self, config_path, resnet_dataloader: ResNetDataloader=None, output_dir=None):
+    def __init__(self, config_path, resnet_dataloader: ResNetDataloader=None, output_dir=None, resume_checkpoint_path=None):
         self.config_path = config_path
         print(f"Loading config from: {config_path}")
         
@@ -75,11 +75,11 @@ class ResNet18Test:
         self.model = self.model.to(self.device)
         
         # Resume from checkpoint
-        self.resume_from_checkpoint()
+        self.resume_from_checkpoint(resume_checkpoint_path)
         
         
         
-    def resume_from_checkpoint(self):
+    def resume_from_checkpoint(self, resume_checkpoint_path=None):
         self.start_epoch = 0
         self.best_val_acc = -1.0
         self.lowest_val_loss = float("inf")
@@ -88,6 +88,11 @@ class ResNet18Test:
         self.checkpointing_steps = self.config["logging"]["checkpointing_steps"]
         resume_from_checkpoint = self.config["logging"]["resume_from_checkpoint"]
         checkpoint_dir = self.config["logging"]["checkpoint_dir"]
+        
+        if resume_checkpoint_path is not None:
+            checkpoint_dir = resume_checkpoint_path
+        print(f"Resume from checkpoint: {resume_from_checkpoint}, checkpoint dir: {checkpoint_dir}")
+        print(self.config["logging"])
         if resume_from_checkpoint and checkpoint_dir is not None:
             if os.path.isfile(checkpoint_dir):
                 print(f"Loading checkpoint from: {checkpoint_dir}")
@@ -204,7 +209,10 @@ class ResNet18Test:
                 
             # Save checkpoint
             if (epoch + 1) % self.checkpointing_steps == 0:
-                output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
+                #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
+                #output_name = f"resnet18_epoch{epoch+1}.ckpt"
+                output_name = f"resnet18_latest.ckpt"
+                output_checkpoint_path = os.path.join(self.output_dir, output_name)
                 torch.save({
                     "epoch": epoch,
                     "model_state_dict": self.model.state_dict(),
@@ -213,9 +221,11 @@ class ResNet18Test:
                     "val_loss": self.log_val_loss,
                     "train_acc": self.log_train_acc,
                     "val_acc": self.log_val_acc,
-                }, os.path.join(self.output_dir, output_name))
+                }, output_checkpoint_path)
                 # Update config file with checkpoint directory
-                self.config["logging"]["checkpoint_dir"] = str(os.path.join(self.output_dir, output_name))
+                self.config["logging"]["checkpoint_dir"] = str(output_checkpoint_path)
+                print(f"Checkpoint saved: {output_checkpoint_path}")
+                print(f"Config path: {self.config_output_path}")
                 with open(self.config_output_path, "w") as f:
                     json.dump(self.config, f)
                 print(f"Checkpoint saved: {output_name}")
@@ -231,6 +241,9 @@ class ResNet18Test:
             estimated_finish_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + remaining_time))
             tqdm.write(f"Epoch {epoch+1}/{self.num_epochs}, Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%, Remaining time: {remaining_time_hms}, Estimated finish time: {estimated_finish_time}")
         print("Training complete.")
+        # Rename latest checkpoint to include final val acc and val loss
+        final_checkpoint_path = os.path.join(self.output_dir, f"resnet18_final_valacc{val_acc:.2f}_valloss{val_loss:.4f}.ckpt")
+        os.rename(os.path.join(self.output_dir, "resnet18_latest.ckpt"), final_checkpoint_path)
         writer.close()
         
     def load_resnet18(self, num_classes):
