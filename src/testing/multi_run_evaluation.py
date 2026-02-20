@@ -105,9 +105,9 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
         f1_scores = [run["f1_score"] for run in runs]
         
         split_data["mean_accuracy"] = float(np.mean(accuracies))
-        split_data["std_accuracy"] = float(np.std(accuracies))
+        split_data["std_accuracy"] = float(np.std(accuracies, ddof=1))  # Use sample std deviation
         split_data["mean_f1_score"] = float(np.mean(f1_scores))
-        split_data["std_f1_score"] = float(np.std(f1_scores))
+        split_data["std_f1_score"] = float(np.std(f1_scores, ddof=1))  # Use sample std deviation
         
         print(f"\n[INFO] Summary for {split_name}:")
         print(f"  Runs: {len(runs)}")
@@ -136,6 +136,9 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
     
     # Create summary plot
     create_multi_run_plot(sorted_splits, output_dir)
+    
+    # Create bar chart comparing mean accuracy across splits
+    bar_chart(sorted_splits, output_dir)
     
     print("\n✓ Multi-run evaluation complete!")
     return multi_run_results
@@ -290,11 +293,49 @@ def create_multi_run_plot(splits_data, output_dir):
         
         print(f"[INFO] Combined plot saved to: {combined_plot_path}")
     
+def bar_chart(splits_data, output_dir):
+    """
+    Create bar chart comparing mean accuracy across splits.
     
+    Args:
+        splits_data: List of split data dictionaries
+        output_dir: Directory to save plot
+    """
+    if not splits_data:
+        print("[WARNING] No data to plot")
+        return
+    
+    synthetic_labels = [str(s["synthetic_image_count"]) for s in splits_data]
+    real_count = splits_data[0]["real_image_count"]
+    mean_accuracies = [s["mean_accuracy"] for s in splits_data]
+    std_accuracies = [s["std_accuracy"] for s in splits_data]
+    
+    plt.figure(figsize=(12, 6))
+    plt.bar(synthetic_labels, mean_accuracies, yerr=std_accuracies, capsize=5, color='skyblue', edgecolor='black')
+    plt.xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
+    plt.ylabel('Mean Accuracy', fontsize=12, fontweight='bold')
+    plt.title(f'Mean Accuracy Across Splits ({real_count} Real Images)', fontsize=14, fontweight='bold')
+    plt.xticks(rotation=0)
+    plt.ylim([0, 1])
+    plt.grid(True, alpha=0.3, linestyle='--', axis='y')
+    
+    # Add value labels on the bars
+    for i, (mean_acc, std_acc) in enumerate(zip(mean_accuracies, std_accuracies)):
+        plt.annotate(f'{mean_acc:.3f}', xy=(i, mean_acc), xytext=(20, 5), 
+                    textcoords='offset points', ha='center', 
+                    fontsize=9, fontweight='bold')
+    
+    plt.tight_layout()
+    
+    bar_chart_path = output_dir / "mean_accuracy_bar_chart.png"
+    plt.savefig(bar_chart_path, dpi=300)
+    plt.close()
+    
+    print(f"[INFO] Bar chart saved to: {bar_chart_path}")
 if __name__ == "__main__":
     parser = ArgumentParser(description="Evaluate multiple ResNet18 runs and aggregate results")
     parser.add_argument(
-        "--resnet18_runs_dir",
+        "--runs_dir",
         type=str,
         default=None,
         help="Directory containing subdirectories for each ResNet18 run (each with a checkpoint and config)"
@@ -305,6 +346,6 @@ if __name__ == "__main__":
         default=None,
         help="Directory to save aggregated results and plots (optional, will create 'multi_run_evaluation' in runs dir if not provided)"
     )
-    args = ["--resnet18_runs_dir", "/home/ap/cloud/Master/aris_master/testing/02-18_normal-wood_impregnated-wood_splits/resnet18_runs"]
-    args = parser.parse_args(args)
-    multi_run_evaluation(args.resnet18_runs_dir, args.output_dir)
+    #args = ["--runs_dir", "/home/ap/cloud/Master/aris_master/testing/02-18_normal-wood_impregnated-wood_splits/resnet18_runs"]
+    args = parser.parse_args()
+    multi_run_evaluation(args.runs_dir, args.output_dir)
