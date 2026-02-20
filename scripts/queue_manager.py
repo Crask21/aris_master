@@ -17,7 +17,8 @@ from pathlib import Path
 from datetime import datetime
 
 # Paths
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent.parent
+print(f"Script directory: {SCRIPT_DIR}")
 QUEUE_DIR = SCRIPT_DIR / "queue"
 COMPLETED_DIR = QUEUE_DIR / "completed"
 FAILED_DIR = QUEUE_DIR / "failed"
@@ -64,13 +65,13 @@ def build_command(execution_str: str, config_path: Path) -> str:
     """
     Build the shell command from the execution string.
     - Replaces $CONFIG with the absolute path of the config file.
-    - Replaces 'python3' with the venv python3 if available.
+    - Replaces '$PYTHON' with the venv python3 if available.
     """
     command = execution_str.replace("$CONFIG", str(config_path.resolve()))
 
-    # If the command starts with python3, use the venv interpreter
-    if VENV_PYTHON.exists() and command.strip().startswith("python3"):
-        command = command.replace("python3", str(VENV_PYTHON), 1)
+    # If the command starts with $PYTHON, use the venv interpreter
+    if VENV_PYTHON.exists() and command.strip().startswith("$PYTHON"):
+        command = command.replace("$PYTHON", str(VENV_PYTHON), 1)
 
     return command
 
@@ -98,14 +99,14 @@ def execute_config(config_path: Path):
         return
 
     queue_settings = config.get("queue", {})
-    execution_str = queue_settings.get("execution")
+    bash_command_str = queue_settings.get("bash_command")
 
-    if not execution_str:
-        print_error(f"No 'execution' field found under 'queue' in {config_name}")
+    if not bash_command_str:
+        print_error(f"No 'bash_command' field found under 'queue' in {config_name}")
         _move_to_dir(config_path, FAILED_DIR, timestamp)
         return
 
-    command = build_command(execution_str, config_path)
+    command = build_command(bash_command_str, config_path)
     print_info(f"Command: {ENDC}{BOLD}{command}")
 
     # Notification flags
@@ -122,7 +123,7 @@ def execute_config(config_path: Path):
         comment = config.get("logging", {}).get("comment", "")
         send_notification(
             title=f"Queue started: {config_name}",
-            message=f"Command: {execution_str}\n{comment}",
+            message=f"Command: {bash_command_str}\n{comment}",
         )
 
     # --- Execute the command ---
@@ -177,7 +178,7 @@ def execute_config(config_path: Path):
         if notify_completion:
             send_notification(
                 title=f"Queue completed: {config_name}",
-                message=f"Finished in {elapsed_str}.\nCommand: {execution_str}",
+                message=f"Finished in {elapsed_str}.\nCommand: {bash_command_str}",
             )
     else:
         # Save log to failed directory
@@ -196,7 +197,7 @@ def execute_config(config_path: Path):
             tail = "".join(log_lines[-20:]) if log_lines else "No output captured."
             send_notification(
                 title=f"Queue FAILED: {config_name}",
-                message=f"Failed after {elapsed_str}.\nCommand: {execution_str}\n\nLast output:\n{tail[:500]}",
+                message=f"Failed after {elapsed_str}.\nCommand: {bash_command_str}\n\nLast output:\n{tail[:500]}",
             )
     return success
 
