@@ -23,6 +23,7 @@ QUEUE_DIR = SCRIPT_DIR / "queue"
 COMPLETED_DIR = QUEUE_DIR / "completed"
 FAILED_DIR = QUEUE_DIR / "failed"
 VENV_PYTHON = SCRIPT_DIR / ".venv" / "bin" / "python3"
+ACCELERATE = SCRIPT_DIR / ".venv" / "bin" / "accelerate"
 
 # Ensure output directories exist
 COMPLETED_DIR.mkdir(parents=True, exist_ok=True)
