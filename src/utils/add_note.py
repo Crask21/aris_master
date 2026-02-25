@@ -7,8 +7,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 def add_note(
-    notes_path,
     title: str,
+    notes_path = None,
+    config_path: Optional[str] = None,
     content: Union[str, list, dict, None, Path] = None,
     text: Optional[str] = None,
 ) -> None:
@@ -30,8 +31,36 @@ def add_note(
             - None: no content added (only title and optional text).
         text: Optional additional text to add below the title.
     """
+    global logger
     sections: List[str] = []
-
+    # Check if a logger is configured, if not, use simple logger
+    if not logger.hasHandlers():
+        # setup basic logger to print to console
+        logging.basicConfig(level=logging.DEBUG, format='[%(levelname)s] %(message)s')
+        logger = logging.getLogger(__name__)
+        
+    if notes_path is None and config_path is not None:
+        # Open config as json
+        import json
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        # Try to get output_dir from config
+        output_dir = config["logging"]["output_dir"]
+        notes_path = Path(output_dir) / "notes.md"
+        # Check if output_dir exists
+        if not Path(output_dir).exists():
+            logger.warning(f"Output directory from config does not exist: {output_dir}.")
+    elif notes_path is None and config_path is None:
+        logging.warning("No notes_path or config_path provided. Skipping note addition.")
+        # Attempted notes path
+    
+    # Check if notes_path exists
+    if notes_path is not None:
+        notes_path = Path(notes_path)
+        if not notes_path.exists():
+            logger.debug(f"Creating new notes file: {notes_path}")
+            notes_path.parent.mkdir(parents=True, exist_ok=True)    
+        
     # Title
     sections.append(f"## {title}\n")
 
@@ -53,7 +82,7 @@ def add_note(
         with open(notes_path, "r", encoding="utf-8") as f:
             existing_content = f.read()
             if block.strip() in existing_content:
-                logger.debug("Note already exists in the file. Skipping append.")
+                logger.debug("Note already exists in the file. Skipping append. Notes path: %s", notes_path)
                 return
 
     # Append or create
@@ -63,6 +92,7 @@ def add_note(
         if mode == "a":
             f.write("\n")
         f.write(block)
+    logger.info(f"Note added to {notes_path} successfully.")
 
 
 # ---------------------------------------------------------------------------
@@ -148,3 +178,15 @@ def _list_to_table(lst: list) -> str:
     for item in lst:
         lines.append(f"| {item} |")
     return "\n".join(lines) + "\n"
+
+if __name__ == "__main__":
+    # Example usage
+    add_note(
+        config_path="/home/ap/cloud/Master/aris_master/queue/scheduled/Aresolution_128.json",
+        title="Test Note",
+        content=[
+            {"Metric": "Accuracy", "Value": "95%"},
+            {"Metric": "Loss", "Value": "0.05"},
+        ],
+        text="This is a test note with a table of metrics.",
+    )
