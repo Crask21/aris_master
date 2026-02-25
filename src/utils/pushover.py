@@ -6,7 +6,7 @@ ANDREAS_TOKEN = "aqy5q6psoain23br3bci8dxeund4ne"
 CASPER_USER = "uvp7eyihevg1bvxqf1of8qdomrf4xr"
 CASPER_TOKEN = "a9jdszjfcgv9f1ut6nqynqir1hx8qq"
 
-def send_notification(title: str, message: str, send_to_andreas: bool = True, send_to_casper: bool = True, priority: int = 0):
+def send_notification(title: str, message: str, send_to_andreas: bool = True, send_to_casper: bool = False, priority: int = 0):
 
     try:
         if send_to_andreas:

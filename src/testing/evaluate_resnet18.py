@@ -136,6 +136,17 @@ def evaluate_model(model, dataloader, device, class_names):
     precision, recall, f1, support = precision_recall_fscore_support(
         all_labels, all_predictions, average='weighted'
     )
+
+    # Per-class accuracy
+    per_class_accuracy = {}
+    for cls_idx, cls_name in enumerate(class_names):
+        mask = all_labels == cls_idx
+        if mask.sum() > 0:
+            per_class_accuracy[cls_name] = float(
+                (all_predictions[mask] == cls_idx).sum() / mask.sum()
+            )
+        else:
+            per_class_accuracy[cls_name] = None
     
     results = {
         "predictions": all_predictions,
@@ -146,7 +157,8 @@ def evaluate_model(model, dataloader, device, class_names):
         "precision": precision,
         "recall": recall,
         "f1": f1,
-        "class_names": class_names
+        "class_names": class_names,
+        "per_class_accuracy": per_class_accuracy,
     }
     
     print(f"\n[RESULTS]")
@@ -154,6 +166,9 @@ def evaluate_model(model, dataloader, device, class_names):
     print(f"  Precision: {precision:.4f}")
     print(f"  Recall:    {recall:.4f}")
     print(f"  F1 Score:  {f1:.4f}")
+    for cls_name, cls_acc in per_class_accuracy.items():
+        if cls_acc is not None:
+            print(f"  {cls_name}: {cls_acc*100:.2f}%")
     
     return results
 
@@ -333,6 +348,7 @@ def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output
         "precision": float(results["precision"]),
         "recall": float(results["recall"]),
         "f1_score": float(results["f1"]),
+        "per_class_accuracy": results["per_class_accuracy"],
         "classification_report": classification_report_dict
     }
     
@@ -429,7 +445,8 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
         "accuracy": float(results["accuracy"]),
         "precision": float(results["precision"]),
         "recall": float(results["recall"]),
-        "f1_score": float(results["f1"])
+        "f1_score": float(results["f1"]),
+        "per_class_accuracy": results["per_class_accuracy"],
     }
     
     summary_path = os.path.join(output_dir, f"evaluation_summary_{split_name}.json")

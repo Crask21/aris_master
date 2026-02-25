@@ -208,7 +208,7 @@ class ResNet18Test:
                 
                 
             # Save checkpoint
-            if (epoch + 1) % self.checkpointing_steps == 0:
+            if (epoch + 1) % self.checkpointing_steps == 0 or epoch == self.num_epochs - 1:
                 #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
                 #output_name = f"resnet18_epoch{epoch+1}.ckpt"
                 output_name = f"resnet18_latest.ckpt"
