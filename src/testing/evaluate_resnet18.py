@@ -24,6 +24,8 @@ from sklearn.metrics import (
 )
 from typing import overload
 from resnet_dataloader import ResNetDataloader
+import logging
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------- #
@@ -50,7 +52,7 @@ def load_model(checkpoint_path, num_classes, device):
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
-    print(f"Loading checkpoint from: {checkpoint_path}")
+    logger.info(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
@@ -79,7 +81,7 @@ def get_test_loader(config_path, dataloader_instance=None):
         if dataloader_instance.test_loader is not None:
             return dataloader_instance.test_loader, "test", dataloader_instance.classes
     except AttributeError:
-        print("[WARNING] test_loader not found in dataloader instance, trying val_loader...")
+        logger.warning("test_loader not found in dataloader instance, trying val_loader...")
     
     if dataloader_instance.val_loader is not None:
         return dataloader_instance.val_loader, "val", dataloader_instance.classes
@@ -107,7 +109,7 @@ def evaluate_model(model, dataloader, device, class_names):
     all_probs = []
     all_filepaths = []
     
-    print(f"[INFO] Evaluating model on {len(dataloader.dataset)} samples...")
+    logger.info(f"Evaluating model on {len(dataloader.dataset)} samples...")
     
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating"):
@@ -161,14 +163,14 @@ def evaluate_model(model, dataloader, device, class_names):
         "per_class_accuracy": per_class_accuracy,
     }
     
-    print(f"\n[RESULTS]")
-    print(f"  Accuracy:  {accuracy*100:.2f}%")
-    print(f"  Precision: {precision:.4f}")
-    print(f"  Recall:    {recall:.4f}")
-    print(f"  F1 Score:  {f1:.4f}")
+    logger.info(f"\n[RESULTS]")
+    logger.info(f"  Accuracy:  {accuracy*100:.2f}%")
+    logger.info(f"  Precision: {precision:.4f}")
+    logger.info(f"  Recall:    {recall:.4f}")
+    logger.info(f"  F1 Score:  {f1:.4f}")
     for cls_name, cls_acc in per_class_accuracy.items():
         if cls_acc is not None:
-            print(f"  {cls_name}: {cls_acc*100:.2f}%")
+            logger.info(f"  {cls_name}: {cls_acc*100:.2f}%")
     
     return results
 
@@ -201,7 +203,7 @@ def save_predictions_csv(results, output_path):
     
     df = pd.DataFrame(df_data)
     df.to_csv(output_path, index=False)
-    print(f"[INFO] Predictions saved to: {output_path}")
+    logger.info(f"[INFO] Predictions saved to: {output_path}")
 
 
 def save_confusion_matrix(results, output_path):
@@ -232,7 +234,7 @@ def save_confusion_matrix(results, output_path):
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"[INFO] Confusion matrix saved to: {output_path}")
+    logger.info(f"[INFO] Confusion matrix saved to: {output_path}")
     
     # Also save normalized confusion matrix
     cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
@@ -254,7 +256,7 @@ def save_confusion_matrix(results, output_path):
     plt.tight_layout()
     plt.savefig(output_path_norm, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"[INFO] Normalized confusion matrix saved to: {output_path_norm}")
+    logger.info(f"[INFO] Normalized confusion matrix saved to: {output_path_norm}")
 
 
 def save_classification_report(results, output_path):
@@ -306,10 +308,10 @@ def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output
     
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Using device: {device}")
+    logger.info(f"[INFO] Using device: {device}")
     
     # Load dataloader
-    print("[INFO] Loading dataloader...")
+    logger.info("[INFO] Loading dataloader...")
     dataloader_instance = ResNetDataloader(config_path)
     
     # Get test loader (or validation as fallback)
@@ -321,9 +323,9 @@ def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output
     
     # Print checkpoint info
     if "epoch" in checkpoint:
-        print(f"[INFO] Loaded checkpoint from epoch {checkpoint['epoch'] + 1}")
+        logger.info(f"[INFO] Loaded checkpoint from epoch {checkpoint['epoch'] + 1}")
     if "val_acc" in checkpoint and len(checkpoint["val_acc"]) > 0:
-        print(f"[INFO] Best validation accuracy during training: {max(checkpoint['val_acc']):.2f}%")
+        logger.info(f"[INFO] Best validation accuracy during training: {max(checkpoint['val_acc']):.2f}%")
     
     # Evaluate model
     results = evaluate_model(model, test_loader, device, class_names)
@@ -332,7 +334,7 @@ def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output
     results["config_path"] = config_path
     
     # Save results
-    print(f"\n[INFO] Saving results to: {output_dir}")
+    logger.info(f"[INFO] Saving results to: {output_dir}")
     save_predictions_csv(results, os.path.join(output_dir, f"predictions_{split_name}.csv"))
     save_confusion_matrix(results, os.path.join(output_dir, f"confusion_matrix_{split_name}.png"))
     classification_report_dict = save_classification_report(results, os.path.join(output_dir, f"classification_report_{split_name}.txt"))
@@ -355,9 +357,9 @@ def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output
     summary_path = os.path.join(output_dir, f"evaluation_summary_{split_name}.json")
     with open(summary_path, 'w') as f:
         json.dump(summary, f, indent=4)
-    print(f"[INFO] Evaluation summary saved to: {summary_path}")
+    logger.info(f"[INFO] Evaluation summary saved to: {summary_path}")
     
-    print("\n✓ Evaluation complete!")
+    logger.warning("\n✓ Evaluation complete!")
     return results
 
 
@@ -402,7 +404,7 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
     
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[INFO] Using device: {device}")
+    logger.debug(f"[INFO] Using device: {device}")
     
     
     # Get test loader (or validation as fallback)
@@ -419,9 +421,9 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
     
     # Print checkpoint info
     if "epoch" in checkpoint:
-        print(f"[INFO] Loaded checkpoint from epoch {checkpoint['epoch'] + 1}")
+        logger.info(f"[INFO] Loaded checkpoint from epoch {checkpoint['epoch'] + 1}")
     if "val_acc" in checkpoint and len(checkpoint["val_acc"]) > 0:
-        print(f"[INFO] Best validation accuracy during training: {max(checkpoint['val_acc']):.2f}%")
+        logger.info(f"[INFO] Best validation accuracy during training: {max(checkpoint['val_acc']):.2f}%")
     
     # Evaluate model
     results = evaluate_model(model, test_loader, device, class_names)
@@ -430,7 +432,7 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
     # results["config_path"] = config_path
     
     # Save results
-    print(f"\n[INFO] Saving results to: {output_dir}")
+    logger.debug(f"[INFO] Saving results to: {output_dir}")
     save_predictions_csv(results, os.path.join(output_dir, f"predictions_{split_name}.csv"))
     save_confusion_matrix(results, os.path.join(output_dir, f"confusion_matrix_{split_name}.png"))
     save_classification_report(results, os.path.join(output_dir, f"classification_report_{split_name}.txt"))
@@ -452,9 +454,9 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
     summary_path = os.path.join(output_dir, f"evaluation_summary_{split_name}.json")
     with open(summary_path, 'w') as f:
         json.dump(summary, f, indent=4)
-    print(f"[INFO] Evaluation summary saved to: {summary_path}")
+    logger.debug(f"[INFO] Evaluation summary saved to: {summary_path}")
     
-    print("\n✓ Evaluation complete!")
+    logger.info("\n✓ Evaluation complete!")
     return results
 
 def multi_run_evaluation(resnet18_runs_dir, output_dir=None):

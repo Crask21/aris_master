@@ -11,7 +11,7 @@ from datasets import load_dataset
 import PIL.Image as Image
 from pathlib import Path
 import logging      
-    
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------- #
 #                                     Class                                    #
@@ -27,7 +27,8 @@ class dataloaderInterface:
                  batch_size: int = None, 
                  num_workers: int = None,
                  synthetic: bool = False,
-                 vae_latents: bool = None):
+                 vae_latents: bool = None,
+                 data_file: str = None):
         
         self.config_path = config
         self.output_dir = output_dir
@@ -39,7 +40,12 @@ class dataloaderInterface:
         self.num_workers = num_workers
         self.synthetic = synthetic
         self.vae_latents = vae_latents
-                
+        self.data_file = data_file
+        # Setup logger
+        if not logger.hasHandlers():
+            #"%(levelname)s - %(message)s"
+            logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+        
         # Initialize config as json object
         with open(config, 'r') as f:            
             self.config = json.load(f)
@@ -51,9 +57,10 @@ class dataloaderInterface:
         if batch_size is None:
             self.batch_size = self.config["hyperparameters"]["batch_size"]
         if num_workers is None:
-            self.num_workers = config["hyperparameters"]["dataloader_num_workers"]
+            self.num_workers = self.config["hyperparameters"]["dataloader_num_workers"]
+        # Check if vae
         if vae_latents is None:
-            self.vae_latents = config["vae"]["use_vae"]
+            self.vae_latents = self.config.get("vae_latents", False)  # Default to False if not specified in config
             
         # Set classes and number of classes from config file
         self.classes = list(self.data_config["classes"].keys())
@@ -70,6 +77,8 @@ class dataloaderInterface:
             self.center_crop = self.data_config["center_crop"]
         if self.random_flip is None:
             self.random_flip = self.data_config["random_flip"]
+            
+        
 
         self.dataloader = self.get_dataloader()
         
@@ -79,7 +88,7 @@ class dataloaderInterface:
         with open(self.output_config_path, 'w') as f:
             json.dump(self.config, f, indent=4)
         
-        print(f"[INFO] Config file saved to {self.output_config_path}")
+        logger.info(f"Config file saved to {self.output_config_path}")
         
 # ----------------- Generate data dictionary from config file ---------------- #
     def generate_data_split(self, split: str):
@@ -101,7 +110,7 @@ class dataloaderInterface:
             for sub_category in all_sub_categories:
                 # Assert that the sub-category exists
                 if not Path(data_dir + "/" + sub_category).exists():
-                    logging.warning(f"Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
+                    logger.warning(f"Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
                     continue
                 
                 # Find all .png files in the data_dir directory for the sub-category
@@ -146,16 +155,29 @@ class dataloaderInterface:
 # ------------------------------ Get dataloader ------------------------------ #
     def get_dataloader(self, split="train"):
         # ----- Load data ----- #
-        train_dict = self.generate_data_split(split="train")
+        if self.data_file is not None:
+            logger.info(f"Loading dataset from provided data file: {self.data_file}")
+            with open(self.data_file, 'r') as f:
+                train_dict = json.load(f)
+            train_dict = [sample for sample in train_dict if sample["split"] == "train"]
+            logger.info(f"Loaded {len(train_dict)} training samples from data file.")
+        else:
+            train_dict = self.generate_data_split(split="train")
         val_dict = self.generate_data_split(split="val")
         
         data_dict = train_dict + val_dict
-        self.data_json_path = os.path.join("/tmp/", "data_file.json")
+        self.data_json_path = os.path.join(self.output_dir, "data_file.json")
+        
+        # Check if the data_json file exists
+        if not os.path.exists(self.data_json_path):
+            # If the file does not exist, create the folder path to it
+            os.makedirs(os.path.dirname(self.data_json_path), exist_ok=True)
+            
         
         # Dump data files to json file
         with open(self.data_json_path, 'w') as f:
             json.dump(data_dict, f, indent=4)
-            print(f"[INFO] Data dictionary saved to {self.data_json_path}")
+            logger.info(f"Data dictionary saved to {self.data_json_path}")
             
         # Load dataset from json file
         dataset = load_dataset("json", data_files=self.data_json_path)
@@ -163,7 +185,7 @@ class dataloaderInterface:
         self.train_ds = dataset["train"].filter(lambda x: x["split"] == "train")
         self.val_ds = dataset["train"].filter(lambda x: x["split"] == "val")
         
-        print(f"[INFO] Dataset loaded from {self.config_path} with {len(self.train_ds)} training samples and {len(self.val_ds)} validation samples.")
+        logger.info(f"Dataset loaded from {self.config_path} with {len(self.train_ds)} training samples and {len(self.val_ds)} validation samples.")
         if split == "train":
             dataset = self.train_ds
         elif split == "val":
@@ -172,7 +194,7 @@ class dataloaderInterface:
             raise ValueError("Invalid split. Must be 'train' or 'val'.")
         
         if not self.vae_latents:
-            print(f"[INFO] Using image dataset with resolution {self.resolution} and augmentations: center_crop={self.center_crop}, random_flip={self.random_flip}")
+            logger.info(f"Using image dataset with resolution {self.resolution} and augmentations: center_crop={self.center_crop}, random_flip={self.random_flip}")
             # --- Define augmentations --- #
             # Preprocessing the datasets and DataLoaders creation.
             spatial_augmentations = [
@@ -195,7 +217,7 @@ class dataloaderInterface:
                 self.preview_dataloader(self.dataloader)
                 self.print_dataset_summary(data_dict)
         else:
-            print(f"[INFO] Using VAE latent dataset with resolution {self.resolution}")
+            logger.info(f"Using VAE latent dataset with resolution {self.resolution}")
             # For VAE latents, we don't need to apply augmentations, but we still need to load the data and create a dataloader
             
             
@@ -248,11 +270,34 @@ class dataloaderInterface:
         # Save figure to output directory
         output_path = os.path.join(self.output_dir, "dataloader_preview.png")
         plt.savefig(output_path)
-        print(f"[INFO] Dataloader preview saved to {output_path}")
+        logger.info(f"Dataloader preview saved to {output_path}")
         plt.show()
 
-
 # ------------------------- Dataset summary function ------------------------- #
+    def _format_percentage(self, numerator, denominator):
+        if denominator <= 0:
+            return "0.00%"
+        return f"{(numerator / denominator) * 100:.2f}%"
+
+    def _log_markdown_table(self, headers, rows):
+        string_rows = [[str(cell) for cell in row] for row in rows]
+        widths = []
+        for idx, header in enumerate(headers):
+            max_row_width = max((len(row[idx]) for row in string_rows), default=0)
+            widths.append(max(len(str(header)), max_row_width))
+
+        def _format_row(cells):
+            return "| " + " | ".join(str(cells[i]).ljust(widths[i]) for i in range(len(widths))) + " |"
+
+        separator = "|-" + "-|-".join("-" * width for width in widths) + "-|"
+
+        logger.info(_format_row(headers))
+        logger.info(separator)
+        for row in string_rows:
+            logger.info(_format_row(row))
+        logger.info("")
+
+
     def print_dataset_summary(self, data_dict):
         """Print a formatted summary of the dataset with split and class distributions.
         
@@ -260,117 +305,122 @@ class dataloaderInterface:
             data_dict: list of dictionaries containing 'filepath', 'class', and 'split' keys
         """
         from collections import Counter
-        
-        # Count splits (map 'synth' to 'train' for main split table)
+
+        # Count splits (map 'synth' to 'train' for the main tables)
         split_counts = Counter()
-        for item in data_dict:
-            split = item['split']
-            if split == 'synth':
-                split_counts['train'] += 1
-            else:
-                split_counts[split] += 1
-        
-        # Map 'val' to 'validation' for display
-        display_split_counts = {}
-        for split, count in split_counts.items():
-            display_name = 'validation' if split == 'val' else split
-            display_split_counts[display_name] = count
-        
-        total_images = sum(display_split_counts.values())
-        
-        print("### Dataset summary:\n")
-        
-        # Split distribution table
-        print("| Split | Count | Share of overall |")
-        print("|-------|-------|------------------|")
-        for split in sorted(display_split_counts.keys()):
-            count = display_split_counts[split]
-            percentage = (count / total_images) * 100
-            print(f"| {split:<20} | {count:<20} | {percentage:.2f}%{' ' * 14} |")
-        print(f"| {'TOTAL':<20} | {total_images:<20} | {100.00:.2f}%{' ' * 14} |")
-        print()
-        
-        # Class distribution per split
-        class_split_counts = {}
+        class_split_counts = Counter()
+        real_synth_counts = Counter()
+
+        classes_in_data = set()
         for item in data_dict:
             cls = item['class']
             split = item['split']
-            # Map synth to train for this table
-            if split == 'synth':
-                split = 'train'
-            elif split == 'val':
-                split = 'validation'
-            
-            if cls not in class_split_counts:
-                class_split_counts[cls] = {}
-            if split not in class_split_counts[cls]:
-                class_split_counts[cls][split] = 0
-            class_split_counts[cls][split] += 1
-        
-        print("| Class             | Count (train) | Share of train | Count (validation) | Share of validation |")
-        print("|------------------|---------------|----------------|--------------------|----------------------|")
-        
-        train_total = display_split_counts.get('train', 0)
-        val_total = display_split_counts.get('validation', 0)
-        
-        for cls in sorted(class_split_counts.keys()):
-            train_count = class_split_counts[cls].get('train', 0)
-            val_count = class_split_counts[cls].get('validation', 0)
-            train_pct = (train_count / train_total * 100) if train_total > 0 else 0
-            val_pct = (val_count / val_total * 100) if val_total > 0 else 0
-            
-            print(f"| {cls:<20} | {train_count:<20} | {train_pct:.2f}%{' ' * 14} | {val_count:<20} | {val_pct:.2f}%{' ' * 14} |")
-        
-        print(f"| {'TOTAL':<20} | {train_total:<20} | {100.00:.2f}%{' ' * 14} | {val_total:<20} | {100.00:.2f}%{' ' * 14} |")
-        print()
-        
-        # Real vs. synthetic training split
-        print("#### Real vs. synthetic training split:\n")
-        print()
-        print()
-        print("| Class             | Count (train, real) | Share of train (real) | Count (train, synthetic) | Share of train (synthetic) |")
-        print("|------------------|---------------------|-----------------------|--------------------------|----------------------------|")
-        
-        real_synth_counts = {}
-        for item in data_dict:
-            if item['split'] in ['train', 'synth']:
-                cls = item['class']
-                split_type = 'real' if item['split'] == 'train' else 'synthetic'
-                
-                if cls not in real_synth_counts:
-                    real_synth_counts[cls] = {'real': 0, 'synthetic': 0}
-                real_synth_counts[cls][split_type] += 1
-        
-        total_real = 0
-        total_synthetic = 0
-        
-        for cls in sorted(real_synth_counts.keys()):
-            real_count = real_synth_counts[cls]['real']
-            synth_count = real_synth_counts[cls]['synthetic']
-            total_real += real_count
-            total_synthetic += synth_count
-            
-            class_total = real_count + synth_count
-            real_pct = (real_count / class_total * 100) if class_total > 0 else 0
-            synth_pct = (synth_count / class_total * 100) if class_total > 0 else 0
-            
-            print(f"| {cls:<20} | {real_count:<20} | {real_pct:.2f}%{' ' * 14} | {synth_count:<24} | {synth_pct:.2f}%{' ' * 14} |")
-        
-        train_total_all = total_real + total_synthetic
-        real_pct_total = (total_real / train_total_all * 100) if train_total_all > 0 else 0
-        synth_pct_total = (total_synthetic / train_total_all * 100) if train_total_all > 0 else 0
-        
-        print(f"| {'TOTAL':<20} | {total_real:<20} | {real_pct_total:.2f}%{' ' * 14} | {total_synthetic:<24} | {synth_pct_total:.2f}%{' ' * 14} |")
-        print()
+            classes_in_data.add(cls)
+
+            mapped_split = 'train' if split == 'synth' else split
+            display_split = 'validation' if mapped_split == 'val' else mapped_split
+
+            split_counts[display_split] += 1
+            class_split_counts[(cls, display_split)] += 1
+
+            if split in ['train', 'synth']:
+                split_type = 'real' if split == 'train' else 'synthetic'
+                real_synth_counts[(cls, split_type)] += 1
+
+        total_images = sum(split_counts.values())
+
+        logger.info("### Dataset summary:\n")
+
+        # Split distribution table
+        split_rows = []
+        for split_name in sorted(split_counts.keys()):
+            count = split_counts[split_name]
+            split_rows.append([
+                split_name,
+                count,
+                self._format_percentage(count, total_images),
+            ])
+        split_rows.append([
+            'TOTAL',
+            total_images,
+            self._format_percentage(total_images, total_images),
+        ])
+        self._log_markdown_table(["Split", "Count", "Share of overall"], split_rows)
+
+        # Class distribution for train/validation
+        train_total = split_counts.get('train', 0)
+        val_total = split_counts.get('validation', 0)
+
+        class_rows = []
+        for cls in sorted(classes_in_data):
+            train_count = class_split_counts[(cls, 'train')]
+            val_count = class_split_counts[(cls, 'validation')]
+            class_rows.append([
+                cls,
+                train_count,
+                self._format_percentage(train_count, train_total),
+                val_count,
+                self._format_percentage(val_count, val_total),
+            ])
+
+        class_rows.append([
+            'TOTAL',
+            train_total,
+            self._format_percentage(train_total, train_total),
+            val_total,
+            self._format_percentage(val_total, val_total),
+        ])
+
+        self._log_markdown_table(
+            ["Class", "Count (train)", "Share of train", "Count (validation)", "Share of validation"],
+            class_rows,
+        )
+
+        # Real vs synthetic training split
+        logger.info("#### Real vs. synthetic training split:\n")
+
+        total_real = sum(real_synth_counts[(cls, 'real')] for cls in classes_in_data)
+        total_synthetic = sum(real_synth_counts[(cls, 'synthetic')] for cls in classes_in_data)
+
+        real_synth_rows = []
+        for cls in sorted(classes_in_data):
+            real_count = real_synth_counts[(cls, 'real')]
+            synthetic_count = real_synth_counts[(cls, 'synthetic')]
+            real_synth_rows.append([
+                cls,
+                real_count,
+                self._format_percentage(real_count, total_real),
+                synthetic_count,
+                self._format_percentage(synthetic_count, total_synthetic),
+            ])
+
+        real_synth_rows.append([
+            'TOTAL',
+            total_real,
+            self._format_percentage(total_real, total_real),
+            total_synthetic,
+            self._format_percentage(total_synthetic, total_synthetic),
+        ])
+
+        self._log_markdown_table(
+            [
+                "Class",
+                "Count (train, real)",
+                "Share of train (real)",
+                "Count (train, synthetic)",
+                "Share of train (synthetic)",
+            ],
+            real_synth_rows,
+        )
 
     
     
 # ---------------------------------------------------------------------------- #
 #                                     Main                                     #
 # ---------------------------------------------------------------------------- #
-def main():        
+def main():
     print("Testing dataloader interface...")
-    config_path = "/media/aris/Data/master2025dev/aris_master/training/template/config.json"
+    config_path = "/home/ap/cloud/Master/aris_master/queue/scheduled/resolution_224.json"
     dl_interface = dataloaderInterface(config = config_path)
     print("Dataloader interface test completed successfully.")
     

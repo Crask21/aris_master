@@ -17,6 +17,8 @@ import numpy as np
 import os
 from tqdm import tqdm
 import time
+import logging
+logger = logging.getLogger(__name__)
 
 
 from resnet_dataloader import ResNetDataloader
@@ -31,8 +33,8 @@ try:
     from src.summarize_training.generate_config_summary import generate_data_summary_from_config
     from src.testing.evaluate_resnet18 import evaluate_resnet18
 except ImportError as e:
-    print(f"Could not import custom training session modules: {e}", file=sys.stderr)
-    print("Make sure you have the 'src/summarize_training' folder.", file=sys.stderr)
+    logger.warning(f"Could not import custom training session modules: {e}")
+    logger.warning("Make sure you have the 'src/summarize_training' folder.")
     evaluate_resnet18 = None
     pass
 
@@ -45,7 +47,7 @@ def load_resnet18(num_classes):
 class ResNet18Test:
     def __init__(self, config_path, resnet_dataloader: ResNetDataloader=None, output_dir=None, resume_checkpoint_path=None):
         self.config_path = config_path
-        print(f"Loading config from: {config_path}")
+        logger.info(f"Loading config from: {config_path}")
         
         # Load hyperparameters and logging settings from config
         with open(config_path, "r") as f:
@@ -91,11 +93,10 @@ class ResNet18Test:
         
         if resume_checkpoint_path is not None:
             checkpoint_dir = resume_checkpoint_path
-        print(f"Resume from checkpoint: {resume_from_checkpoint}, checkpoint dir: {checkpoint_dir}")
-        print(self.config["logging"])
+        logger.debug(f"Resume from checkpoint: {resume_from_checkpoint}, checkpoint dir: {checkpoint_dir}")
         if resume_from_checkpoint and checkpoint_dir is not None:
             if os.path.isfile(checkpoint_dir):
-                print(f"Loading checkpoint from: {checkpoint_dir}")
+                logger.info(f"Loading checkpoint from: {checkpoint_dir}")
                 checkpoint = torch.load(checkpoint_dir)
                 self.model.load_state_dict(checkpoint["model_state_dict"])
                 self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -106,7 +107,7 @@ class ResNet18Test:
                 self.log_val_acc = checkpoint["val_acc"]
                 self.best_val_acc = max(self.log_val_acc)
                 self.lowest_val_loss = min(self.log_val_loss)
-                print(f"Resuming training from epoch {self.start_epoch}. Best val acc so far: {self.best_val_acc:.2f}%")
+                logger.info(f"Resuming training from epoch {self.start_epoch}. Best val acc so far: {self.best_val_acc:.2f}%")
                 
     def set_seed(seed=42):
         random.seed(seed)
@@ -120,7 +121,8 @@ class ResNet18Test:
     def train(self):
         writer = SummaryWriter(self.output_dir)
         start_time = time.time()
-
+        val_acc = 0
+        val_loss = float("inf")
         for epoch in tqdm(range(self.start_epoch, self.num_epochs)):
             self.model.train()
             running_loss = 0.0
@@ -188,7 +190,7 @@ class ResNet18Test:
                     "train_acc": self.log_train_acc,
                     "val_acc": self.log_val_acc,
                 }, output_checkpoint_path)
-                print(f"New best val acc: {self.best_val_acc:.2f}%. Model checkpoint saved: {output_checkpoint_path}")
+                logging.info(f"New best val acc: {self.best_val_acc:.2f}%. Model checkpoint saved: {output_checkpoint_path}")
                 
             if val_loss < self.lowest_val_loss:
                 self.lowest_val_loss = val_loss
@@ -204,7 +206,7 @@ class ResNet18Test:
                     "train_acc": self.log_train_acc,
                     "val_acc": self.log_val_acc,
                 }, output_checkpoint_path)
-                print(f"New lowest val loss: {self.lowest_val_loss:.4f}. Model checkpoint saved: {output_checkpoint_path}")
+                logging.info(f"New lowest val loss: {self.lowest_val_loss:.4f}. Model checkpoint saved: {output_checkpoint_path}")
                 
                 
             # Save checkpoint
@@ -224,11 +226,10 @@ class ResNet18Test:
                 }, output_checkpoint_path)
                 # Update config file with checkpoint directory
                 self.config["logging"]["checkpoint_dir"] = str(output_checkpoint_path)
-                print(f"Checkpoint saved: {output_checkpoint_path}")
-                print(f"Config path: {self.config_output_path}")
+                logging.info(f"Checkpoint saved: {output_checkpoint_path}")
+                logging.debug(f"Config path: {self.config_output_path}")
                 with open(self.config_output_path, "w") as f:
                     json.dump(self.config, f)
-                print(f"Checkpoint saved: {output_name}")
             
             
             # -------------------------- Estimate remaining time ------------------------- #
@@ -240,7 +241,7 @@ class ResNet18Test:
             # Estimated time that the model is expected to finish training
             estimated_finish_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + remaining_time))
             tqdm.write(f"Epoch {epoch+1}/{self.num_epochs}, Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%, Remaining time: {remaining_time_hms}, Estimated finish time: {estimated_finish_time}")
-        print("Training complete.")
+        logger.info("Training complete.")
         # Rename latest checkpoint to include final val acc and val loss
         final_checkpoint_path = os.path.join(self.output_dir, f"resnet18_final_valacc{val_acc:.2f}_valloss{val_loss:.4f}.ckpt")
         os.rename(os.path.join(self.output_dir, "resnet18_latest.ckpt"), final_checkpoint_path)
@@ -274,23 +275,23 @@ if __name__ == "__main__":
     
     # Run evaluation if requested
     if args.evaluate and evaluate_resnet18 is not None:
-        print("\n" + "="*80)
-        print("Running post-training evaluation...")
-        print("="*80 + "\n")
+        logger.info("\n" + "="*80)
+        logger.info("Running post-training evaluation...")
+        logger.info("="*80 + "\n")
         try:
             # Use the best validation accuracy checkpoint
             best_checkpoint = os.path.join(resnet_trainer.output_dir, "resnet18_best_val_acc.ckpt")
             if os.path.exists(best_checkpoint):
                 evaluate_resnet18(dataloader=resnet_trainer.waste_dataloader, checkpoint_dir=resnet_trainer.output_dir, best_checkpoint="lowest_val_loss")
             else:
-                print("[WARNING] Best checkpoint not found, skipping evaluation")
+                logger.warning("Best checkpoint not found, skipping evaluation")
         except Exception as e:
-            print(f"[ERROR] Evaluation failed: {e}")
+            logger.error(f"Evaluation failed: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)
     elif args.evaluate:
-        print("[WARNING] Evaluation not available, evaluate_resnet18 could not be imported")
+        logger.warning("Evaluation not available, evaluate_resnet18 could not be imported")
 
     
     

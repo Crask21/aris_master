@@ -26,7 +26,7 @@ from src.summarize_training.generate_config_summary import generate_data_summary
 #                                     Class                                    #
 # ---------------------------------------------------------------------------- #
 class ResNetDataloader(dataloaderInterface):
-    def __init__(self, config_path,real_image_count=None, synthetic_image_count=None):
+    def __init__(self, config_path,real_image_count=None, synthetic_image_count=None, **kwargs):
         
         with open(config_path, 'r') as f:
             config = json.load(f)
@@ -48,7 +48,7 @@ class ResNetDataloader(dataloaderInterface):
         self.seed = np.random.randint(0, 100000)
         print(f"[INFO] Random seed for this run: {self.seed}")
         
-        super().__init__(config_path,preview=False) 
+        super().__init__(config_path,preview=False, **kwargs)
         
         
 
@@ -150,8 +150,13 @@ class ResNetDataloader(dataloaderInterface):
 # ------------------------- Validation augmentations ------------------------- #
     def val_augmentations(self):
             # Preprocessing the datasets and DataLoaders creation.
+        spatial_augmentations = [
+            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
+        ]
 
-        self.augmentations = transforms.Compose([
+        self.augmentations = transforms.Compose(
+            spatial_augmentations
+            + [
                 transforms.ToTensor(),
                 transforms.Normalize([0.5], [0.5]),
             ]
@@ -177,12 +182,19 @@ class ResNetDataloader(dataloaderInterface):
             processed.append(self.val_aug(image.convert("RGB")))
         class_indices = [self.class_LUT[cls] for cls in examples["class"]]
         return {"image": processed, "class": class_indices}
+    
 # ------------------------------ Get dataloader ------------------------------ #
     def get_dataloader(self, split="train"):
         # ----- Load data ----- #
         
-
-        real_train_split = self.generate_data_split(split="train", image_count=self.real_image_count)
+        if self.data_file is not None:
+            print(f"[INFO] Loading dataset from provided data file: {self.data_file}")
+            with open(self.data_file, 'r') as f:
+                real_train_split = json.load(f)
+            # Keep only the images from the 'train' split
+            real_train_split = [sample for sample in real_train_split if sample["split"] == "train"]
+        else:
+            real_train_split = self.generate_data_split(split="train", image_count=self.real_image_count)
         synthetic_train_split = self.generate_data_split(split="synth", image_count=self.synthetic_image_count)
         val_split = self.generate_data_split(split="val")
         

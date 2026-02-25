@@ -7,6 +7,9 @@ from pathlib import Path
 import os
 # Import parser args
 from argparse import ArgumentParser
+from src.utils.add_note import add_note
+import logging
+logger = logging.getLogger(__name__)
 
 
 def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
@@ -29,8 +32,8 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
         output_dir = Path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
     
-    print(f"[INFO] Analyzing runs in: {resnet18_runs_dir}")
-    print(f"[INFO] Output directory: {output_dir}")
+    logger.info(f"Analyzing runs in: {resnet18_runs_dir}")
+    logger.debug(f"Output directory: {output_dir}")
     
     # Find all run directories
     run_dirs = sorted([d for d in resnet18_runs_dir.iterdir() if d.is_dir()])
@@ -38,7 +41,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
     if not run_dirs:
         raise ValueError(f"No run directories found in: {resnet18_runs_dir}")
     
-    print(f"[INFO] Found {len(run_dirs)} run directories")
+    logger.info(f"Found {len(run_dirs)} run directories")
     
     # Group runs by split configuration (e.g., "2000-real_0-synthetic")
     splits_data = {}
@@ -51,7 +54,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
         import re
         match = re.match(r'(\d+)-real_(\d+)-synthetic_run(\d+)', dir_name)
         if not match:
-            print(f"[WARNING] Skipping directory with unexpected name format: {dir_name}")
+            logger.warning(f"Skipping directory with unexpected name format: {dir_name}")
             continue
         
         real_count = int(match.group(1))
@@ -64,7 +67,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
         eval_summary_path = run_dir / "evaluation" / "evaluation_summary_val.json"
         
         if not eval_summary_path.exists():
-            print(f"[WARNING] No evaluation summary found for {dir_name}, skipping...")
+            logger.warning(f"No evaluation summary found for {dir_name}, skipping...")
             continue
         
         # Load evaluation summary
@@ -91,14 +94,14 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
         }
         
         splits_data[split_name]["runs"].append(run_data)
-        print(f"[INFO] Loaded results for {split_name} run{run_number}: acc={eval_summary['accuracy']:.4f}, f1={eval_summary['f1_score']:.4f}")
+        logger.info(f"Loaded results for {split_name} run{run_number}: acc={eval_summary['accuracy']:.4f}, f1={eval_summary['f1_score']:.4f}")
     
     # Calculate mean and std for each split
     for split_name, split_data in splits_data.items():
         runs = split_data["runs"]
         
         if len(runs) == 0:
-            print(f"[WARNING] No runs found for split: {split_name}")
+            logger.warning(f"No runs found for split: {split_name}")
             continue
         
         accuracies = [run["accuracy"] for run in runs]
@@ -109,10 +112,10 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
         split_data["mean_f1_score"] = float(np.mean(f1_scores))
         split_data["std_f1_score"] = float(np.std(f1_scores, ddof=1))  # Use sample std deviation
         
-        print(f"\n[INFO] Summary for {split_name}:")
-        print(f"  Runs: {len(runs)}")
-        print(f"  Mean Accuracy: {split_data['mean_accuracy']:.4f} ± {split_data['std_accuracy']:.4f}")
-        print(f"  Mean F1 Score: {split_data['mean_f1_score']:.4f} ± {split_data['std_f1_score']:.4f}")
+        logger.info(f"Summary for {split_name}:")
+        logger.info(f"  Runs: {len(runs)}")
+        logger.info(f"  Mean Accuracy: {split_data['mean_accuracy']:.4f} ± {split_data['std_accuracy']:.4f}")
+        logger.info(f"  Mean F1 Score: {split_data['mean_f1_score']:.4f} ± {split_data['std_f1_score']:.4f}")
     
     # Sort splits by real_image_count, then synthetic_image_count
     sorted_splits = sorted(
@@ -132,7 +135,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
     with open(output_path, 'w') as f:
         json.dump(multi_run_results, f, indent=4)
     
-    print(f"\n[INFO] Multi-run results saved to: {output_path}")
+    logger.info(f"Multi-run results saved to: {output_path}")
     
     # Create summary plot
     create_multi_run_plot(sorted_splits, output_dir)
@@ -140,7 +143,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
     # Create bar chart comparing mean accuracy across splits
     bar_chart(sorted_splits, output_dir)
     
-    print("\n✓ Multi-run evaluation complete!")
+    logger.info("✓ Multi-run evaluation complete!")
     return multi_run_results
 
 def create_multi_run_plot(splits_data, output_dir):
@@ -152,7 +155,7 @@ def create_multi_run_plot(splits_data, output_dir):
         output_dir: Directory to save plots
     """
     if not splits_data:
-        print("[WARNING] No data to plot")
+        logger.warning("No data to plot")
         return
     
     # Group splits by real image count
@@ -238,9 +241,14 @@ def create_multi_run_plot(splits_data, output_dir):
         # Save plot
         plot_path = output_dir / f"accuracy_f1_vs_synthetic_{real_count}_real.png"
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Accuracy and F1 Score vs Synthetic Images in Connected dot plot",
+            content=plot_path
+        )
         plt.close()
         
-        print(f"[INFO] Plot saved to: {plot_path}")
+        logger.info(f"Plot saved to: {plot_path}")
     
     # Create combined plot if there are multiple real counts
     if len(splits_by_real) > 1:
@@ -289,9 +297,15 @@ def create_multi_run_plot(splits_data, output_dir):
         
         combined_plot_path = output_dir / "accuracy_f1_vs_synthetic_combined.png"
         plt.savefig(combined_plot_path, dpi=300, bbox_inches='tight')
+        
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Combined Accuracy and F1 Score vs Synthetic Images in Connected dot plot",
+            content=combined_plot_path
+        )
         plt.close()
         
-        print(f"[INFO] Combined plot saved to: {combined_plot_path}")
+        logger.info(f"Combined plot saved to: {combined_plot_path}")
     
 def bar_chart(splits_data, output_dir):
     """
@@ -302,7 +316,7 @@ def bar_chart(splits_data, output_dir):
         output_dir: Directory to save plot
     """
     if not splits_data:
-        print("[WARNING] No data to plot")
+        logger.warning("No data to plot")
         return
     
     synthetic_labels = [str(s["synthetic_image_count"]) for s in splits_data]
@@ -329,9 +343,14 @@ def bar_chart(splits_data, output_dir):
     
     bar_chart_path = output_dir / "mean_accuracy_bar_chart.png"
     plt.savefig(bar_chart_path, dpi=300)
+    add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Mean Accuracy Bar Chart",
+            content=bar_chart_path
+        )
     plt.close()
     
-    print(f"[INFO] Bar chart saved to: {bar_chart_path}")
+    logger.info(f"Bar chart saved to: {bar_chart_path}")
 if __name__ == "__main__":
     parser = ArgumentParser(description="Evaluate multiple ResNet18 runs and aggregate results")
     parser.add_argument(

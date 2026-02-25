@@ -1,15 +1,15 @@
 import requests
 
 ANDREAS_USER = "usozo22dr29waq7yx9f5u3ab74717x"
-ANDREAS_TOKEN = "at2di7dvcc9gsds3f73cfo6rbcw77r"
+ANDREAS_TOKEN = "aqy5q6psoain23br3bci8dxeund4ne"
 
 CASPER_USER = "uvp7eyihevg1bvxqf1of8qdomrf4xr"
 CASPER_TOKEN = "a9jdszjfcgv9f1ut6nqynqir1hx8qq"
 
-def send_notification(title: str, message: str, send_to_andreas: bool = True, send_to_casper: bool = False, priority: int = 0):
+def send_notification(title: str, message: str, notify_andreas: bool = True, notify_casper: bool = False, priority: int = 0):
 
     try:
-        if send_to_andreas:
+        if notify_andreas:
             requests.post(
                 "https://api.pushover.net/1/messages.json",
                 data={
@@ -21,7 +21,7 @@ def send_notification(title: str, message: str, send_to_andreas: bool = True, se
                 },
                 timeout=5,
             )
-        if send_to_casper:
+        if notify_casper:
             requests.post(
                 "https://api.pushover.net/1/messages.json",
                 data={
