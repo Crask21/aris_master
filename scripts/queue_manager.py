@@ -19,10 +19,11 @@ from datetime import datetime
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 print(f"Script directory: {SCRIPT_DIR}")
-QUEUE_DIR = SCRIPT_DIR / "queue"
-COMPLETED_DIR = QUEUE_DIR / "completed"
-FAILED_DIR = QUEUE_DIR / "failed"
+QUEUE_DIR = SCRIPT_DIR / "queue" / "scheduled"
+COMPLETED_DIR = SCRIPT_DIR / "queue" / "completed"
+FAILED_DIR = SCRIPT_DIR / "queue" / "failed"
 VENV_PYTHON = SCRIPT_DIR / ".venv" / "bin" / "python3"
+VENV_ACCELERATE = SCRIPT_DIR / ".venv" / "bin" / "accelerate"
 
 # Ensure output directories exist
 COMPLETED_DIR.mkdir(parents=True, exist_ok=True)
@@ -72,6 +73,8 @@ def build_command(execution_str: str, config_path: Path) -> str:
     # If the command starts with $PYTHON, use the venv interpreter
     if VENV_PYTHON.exists() and command.strip().startswith("$PYTHON"):
         command = command.replace("$PYTHON", str(VENV_PYTHON), 1)
+    if VENV_ACCELERATE.exists() and command.strip().startswith("$ACCELERATE"):
+        command = command.replace("$ACCELERATE", str(VENV_ACCELERATE), 1)
 
     return command
 
@@ -113,6 +116,8 @@ def execute_config(config_path: Path):
     notify_start = queue_settings.get("send_notification_on_start", False)
     notify_completion = queue_settings.get("send_notification_on_completion", False)
     notify_failure = queue_settings.get("send_notification_on_failure", False)
+    notify_casper = queue_settings.get("notify_casper", True)
+    notify_andreas = queue_settings.get("notify_andreas", True)
     copy_config = queue_settings.get("copy_config_to_output_dir", False)
 
     # Output dir from logging section
@@ -124,6 +129,8 @@ def execute_config(config_path: Path):
         send_notification(
             title=f"Queue started: {config_name}",
             message=f"Command: {bash_command_str}\n{comment}",
+            notify_casper=notify_casper,
+            notify_andreas=notify_andreas,
         )
 
     # --- Execute the command ---
@@ -132,13 +139,17 @@ def execute_config(config_path: Path):
     start_time = time.time()
 
     try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+
         process = subprocess.Popen(
             command,
             shell=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=None,  # Let stderr (tqdm) go directly to terminal
             text=True,
             cwd=str(SCRIPT_DIR),
+            env=env,
         )
 
         # Stream output line by line, capturing to log
@@ -179,6 +190,8 @@ def execute_config(config_path: Path):
             send_notification(
                 title=f"Queue completed: {config_name}",
                 message=f"Finished in {elapsed_str}.\nCommand: {bash_command_str}",
+                notify_casper=notify_casper,
+                notify_andreas=notify_andreas,
             )
     else:
         # Save log to failed directory
@@ -198,6 +211,8 @@ def execute_config(config_path: Path):
             send_notification(
                 title=f"Queue FAILED: {config_name}",
                 message=f"Failed after {elapsed_str}.\nCommand: {bash_command_str}\n\nLast output:\n{tail[:500]}",
+                notify_casper=notify_casper,
+                notify_andreas=notify_andreas,
             )
     return success
 

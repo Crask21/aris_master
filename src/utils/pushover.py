@@ -1,7 +1,7 @@
 import requests
 
 ANDREAS_USER = "usozo22dr29waq7yx9f5u3ab74717x"
-ANDREAS_TOKEN = "at2di7dvcc9gsds3f73cfo6rbcw77r"
+ANDREAS_TOKEN = "aqy5q6psoain23br3bci8dxeund4ne"
 
 CASPER_USER = "uvp7eyihevg1bvxqf1of8qdomrf4xr"
 CASPER_TOKEN = "a9jdszjfcgv9f1ut6nqynqir1hx8qq"
@@ -38,4 +38,4 @@ def send_notification(title: str, message: str, send_to_andreas: bool = True, se
         print(f"Failed to send Pushover notification: {e}")
         
 if __name__ == "__main__":
-    send_notification("Test", "Det her er en test.")
+    send_notification("Test", "Det her er en test.",send_to_casper=False)

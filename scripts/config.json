@@ -20,18 +20,19 @@
     "vae_model_path": "/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned"
   },
   "hyperparameters": {
-    "batch_size": 32,
-    "epochs": 100,
+    "batch_size": 16,
+    "epochs": 1000,
     "learning_rate": 0.00014,
     "dataloader_num_workers": 4
   },
   "logging": {
     "logger": "tensorboard",
-    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-10_4-class_128/",
-    "comment": "Bla. bla. bla.",
+    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-20_DEBUG/",
+    "comment": "Iterative work getting VAE to work",
     "checkpointing_steps": 5,
-    "resume_from_checkpoint": true,
-    "save_images_epochs": 10
+    "resume_from_checkpoint": "latest",
+    "save_images_epochs": 20,
+    "save_model_epochs": 20
   },
   "data": {
     "resolution": 128,
@@ -39,27 +40,9 @@
     "random_flip": true,
     "classes": {
       "impregnated_wood": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories",
-        "sub_categories": [
-          "impregnated_wood",
-          "impregnated_wood_painted",
-          "outdoor_wood",
-          "outdoor_wood_painted",
-          "forest_wood",
-          "fence_outdoor"
-        ]
-      },
-      "hard_plastic": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/plastic",
-        "sub_categories": ["hard_plastic"]
-      },
-      "soft_plastic": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/plastic",
-        "sub_categories": ["soft_plastic"]
-      },
-      "mineral_wool": {
-        "data_dir": "/media/aris/Data/master2025dev/datasets/mineral_wool/all_mineral_wool_categories",
-        "sub_categories": ["glass_wool_brown"]
+        "data_dir": "/media/aris/Data/master2025dev/datasets/wood/4_main_categories",
+        "sub_categories": ["impregnated_wood"],
+        "train_img_count": 1000
       }
     }
   },

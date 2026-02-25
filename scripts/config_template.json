@@ -1,9 +1,9 @@
 {
   "diffusion_parameters": {
-    "lr_scheduler": null,
+    "lr_scheduler": "cosine_with_restarts",
     "ddpm_num_steps": 1000,
     "ddpm_num_inference_steps": 50,
-    "ddpm_beta_schedule": null,
+    "ddpm_beta_schedule": "linear",
     "use_ema": true,
     "lr_warmup_steps": 500,
     "_comment": "------------------ Secondary parameters: -----------------",
@@ -13,7 +13,10 @@
     "adam_epsilon": 1e-8,
     "ema_inv_gamma": 1.0,
     "ema_power": 0.75,
-    "ema_max_decay": 0.9999
+    "ema_max_decay": 0.9999,
+    "mixed_precision": "bf16",
+    "gradient_accumulation_steps": 1,
+    "prediction_type": "epsilon"
   },
   "vae": {
     "use_vae": false,
@@ -21,20 +24,24 @@
   },
   "hyperparameters": {
     "batch_size": 32,
+    "eval_batch_size": 16,
     "epochs": 100,
     "learning_rate": 0.00014,
     "dataloader_num_workers": 4
   },
   "logging": {
     "logger": "tensorboard",
-    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-10_4-class_128/",
-    "comment": "Bla. bla. bla.",
-    "checkpointing_steps": 5,
-    "resume_from_checkpoint": true,
-    "save_images_epochs": 10
+    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-20_DEBUG",
+    "comment": "Iterative work getting VAE to work",
+    "checkpointing_steps": 5000,
+    "checkpoints_total_limit": null,
+    "resume_from_checkpoint": "latest",
+    "save_images_epochs": 20,
+    "save_model_epochs": 20,
+    "debug": false
   },
   "data": {
-    "resolution": 128,
+    "resolution": 256,
     "center_crop": true,
     "random_flip": true,
     "classes": {
@@ -110,5 +117,12 @@
       "UpBlock2D"
     ],
     "upsample_type": "conv"
+  },
+  "queue": {
+    "bash_command": "$ACCELERATE launch src/waste_diffuser/training.py --config_path=$CONFIG ",
+    "send_notification_on_start": true,
+    "send_notification_on_completion": true,
+    "send_notification_on_failure": true,
+    "copy_config_to_output_dir": false
   }
 }

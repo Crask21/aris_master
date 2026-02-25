@@ -99,10 +99,11 @@ class ResNetDataloader(dataloaderInterface):
             category_images = []
             for sub_category in all_sub_categories:
                 # [Assertion] Assert that the sub-category exists
-                if not Path(data_dir + "/" + sub_category).exists() or (split == "synth" and not Path(data_dir + "/" + category).exists()):
+                if not Path(data_dir + "/" + sub_category).exists():
                     print(f"[ERROR] Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
+                    print("hej")
                     sys.exit(1)
-                
+
                 # Find all .png files in the data_dir directory for the sub-category
                 sub_category_path = os.path.join(data_dir, sub_category)
                 for root, dirs, files in os.walk(sub_category_path):

@@ -51,9 +51,13 @@ class dataloaderInterface:
         if batch_size is None:
             self.batch_size = self.config["hyperparameters"]["batch_size"]
         if num_workers is None:
-            self.num_workers = config["hyperparameters"]["dataloader_num_workers"]
+            self.num_workers = self.config["hyperparameters"]["dataloader_num_workers"]
         if vae_latents is None:
-            self.vae_latents = config["vae"]["use_vae"]
+            # Check if vae exists in config file and set vae_latents accordingly
+            if "vae" in self.config:
+                self.vae_latents = self.config["vae"]["use_vae"]
+            else:
+                self.vae_latents = False
             
         # Set classes and number of classes from config file
         self.classes = list(self.data_config["classes"].keys())
@@ -91,6 +95,8 @@ class dataloaderInterface:
         """
         
         data_dict = []
+        
+        
         for category, details in self.data_config["classes"].items():
             data_dir = details["data_dir"] + "/" + split
             # Assert that the data_dir directory exists

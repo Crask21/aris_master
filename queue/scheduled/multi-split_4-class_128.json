@@ -1,6 +1,6 @@
 {
   "queue": {
-    "execution": "python3 src/testing/test_multiple_splits.py --config $CONFIG --train --evaluate",
+    "bash_command": "$PYTHON src/testing/test_multiple_splits.py --config $CONFIG --train --evaluate",
     "send_notification_on_start": false,
     "send_notification_on_completion": true,
     "send_notification_on_failure": true,
