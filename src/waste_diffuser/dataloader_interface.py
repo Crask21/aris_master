@@ -100,6 +100,8 @@ class dataloaderInterface:
         """
         
         data_dict = []
+        
+        
         for category, details in self.data_config["classes"].items():
             data_dir = details["data_dir"] + "/" + split
             # Assert that the data_dir directory exists

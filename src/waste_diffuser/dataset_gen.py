@@ -56,6 +56,7 @@ class Dataset_gen:
         
         pipeline = DDIMPipeline.from_pretrained(self.args.model_dir)
         self.pipeline = pipeline.to("cuda")
+        self.pipeline.unet.eval()
         
         #Make sure output directory exists
         os.makedirs(self.args.output_dir, exist_ok=True)
@@ -69,13 +70,6 @@ class Dataset_gen:
             print(f"Model is conditional with {self.pipeline.unet.config.num_class_embeds} class embeds. Generating images for each class.")
             self.generate_images()
             
-    def generate_images(self):
-        for class_label in range(self.pipeline.unet.config.num_class_embeds):
-            print(f"Generating images for class {class_label}...")
-            images = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.image_num, class_labels=[class_label]*self.args.image_num).images
-            # Save images to output directory
-            for i, image in enumerate(images):
-                image.save(f"{self.args.output_dir}/class_{class_label}_image_{i}.png")
                 
     def generate_images_unconditional(self):
         #Check amount of images already in output directory
@@ -101,6 +95,35 @@ class Dataset_gen:
                 image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=remaining).images
                 for j, img in enumerate(image):
                     img.save(f"{self.args.output_dir}/{(self.args.image_num - remaining) + j:04d}.png")
+    
+    def generate_images(self):
+        for class_label in range(self.pipeline.unet.config.num_class_embeds):
+            print(f"Generating images for class {class_label}...")
+            #Check amount of images already in output directory
+            output_dir_class = os.path.join(self.args.output_dir, f"class_{class_label}")
+            os.makedirs(output_dir_class, exist_ok=True)
+            existing_images = len([f for f in os.listdir(output_dir_class) if f.endswith(".png")])
+            print(f"Found {existing_images} existing images in directory {output_dir_class}.")
+            if existing_images >= self.args.image_num:
+                print(f"Already have {existing_images} images, which is >= requested {self.args.image_num}. Skipping generation.")
+                continue
+            else:
+                print(f"Generating {self.args.image_num - existing_images} new images...")
+                n_images_to_generate = self.args.image_num - existing_images
+                for i in range(n_images_to_generate//self.args.batch_size):
+                    print(f"Generating batch {i+1}/{n_images_to_generate//self.args.batch_size}..." )
+                    image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.batch_size, class_labels=torch.tensor([class_label]*self.args.batch_size).to("cuda")).images
+                    # Save images to output directory
+                    for j, img in enumerate(image):
+                        img.save(f"{output_dir_class}/{i*self.args.batch_size + j:04d}.png")
+                
+                # Handle remaining images if image_num is not divisible by batch_size
+                remaining = n_images_to_generate % self.args.batch_size
+                if remaining > 0:
+                    print(f"Generating remaining {remaining} images...")
+                    image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=remaining, class_labels=torch.tensor([class_label]*remaining).to("cuda")).images
+                    for j, img in enumerate(image):
+                        img.save(f"{output_dir_class}/{(self.args.image_num - remaining) + j:04d}.png")
                 
 
 if __name__ == "__main__":

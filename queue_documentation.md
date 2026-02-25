@@ -16,7 +16,7 @@ First, add the following fields to your `.json` file:
 ...
 }
 ```
-The `bash_command` field should contain the bash command that you want to execute. You can use `$CONFIG` in the command as a placeholder for the path to the current config file. Additionally, when executing python scripts, use `$PYTHON` as this will make it use the virtual environment's python interpreter if it exists. 
+The `bash_command` field should contain the bash command that you want to execute. You can use `$CONFIG` in the command as a placeholder for the path to the current config file. Additionally, when executing python scripts, use `$PYTHON` as this will make it use the virtual environment's python interpreter if it exists. `$ACCELERATE` is also available as a placeholder for the accelerate command if you want to run your script with accelerate.
 
 ### Example:
 ```json

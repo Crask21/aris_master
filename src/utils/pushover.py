@@ -38,4 +38,4 @@ def send_notification(title: str, message: str, notify_andreas: bool = True, not
         print(f"Failed to send Pushover notification: {e}")
         
 if __name__ == "__main__":
-    send_notification("Test", "Det her er en test.")
+    send_notification("Test", "Det her er en test.",send_to_casper=False)
