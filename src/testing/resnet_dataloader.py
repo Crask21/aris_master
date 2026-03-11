@@ -11,14 +11,15 @@ from torchvision import transforms
 from datasets import load_dataset
 import PIL.Image as Image
 from pathlib import Path
-import logging      
+import logging
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-from src.waste_diffuser.dataloader_interface import dataloaderInterface
 
 # Add scripts directory to path for imports
 # scripts_path = str(Path(__file__).resolve().parent.parent.parent / "scripts")
 # if scripts_path not in sys.path:
 #     sys.path.insert(0, scripts_path)
+from src.waste_diffuser.dataloader_interface import dataloaderInterface
+from src.waste_diffuser.augmentations import build_image_augmentations
 from src.summarize_training.generate_config_summary import generate_data_summary_from_config
 
 
@@ -31,7 +32,11 @@ class ResNetDataloader(dataloaderInterface):
         with open(config_path, 'r') as f:
             config = json.load(f)
         data_config = config["data"]
-        
+        # Extract "augmentation.use_data_augmentations_real" from the config file
+        self.data_augmentations_real = config.get("augmentation", {}).get("use_data_augmentations_real", False)
+        self.data_augmentations_synthetic = config.get("augmentation", {}).get("use_data_augmentations_synthetic", False)
+        print(f"[INFO] Data augmentations enabled for real images: {self.data_augmentations_real}")
+        print(f"[INFO] Data augmentations enabled for synthetic images: {self.data_augmentations_synthetic}")
         self.real_image_count = data_config["real_image_count"]
         self.synthetic_image_count = data_config["synthetic_image_count"]
         
@@ -40,15 +45,16 @@ class ResNetDataloader(dataloaderInterface):
         if synthetic_image_count is not None:
             self.synthetic_image_count = synthetic_image_count
         
+        
         # [Assertion] Assert that either real_image_count or synthetic_image_count is specified in the config file
         assert self.real_image_count is not None or self.synthetic_image_count is not None, \
-            f"Either real_image_count or synthetic_image_count must be specified in the config file. Please check the config file and specify at least one of them.\n Config file: {Path(config).resolve()}"
+            f"Either real_image_count or synthetic_image_count must be specified in the config file. Please check the config file and specify at least one of them.\n Config file: {Path(config_path).resolve()}"
         
         # Make a random seed each run
         self.seed = np.random.randint(0, 100000)
         print(f"[INFO] Random seed for this run: {self.seed}")
         
-        super().__init__(config_path,preview=False, **kwargs)
+        super().__init__(config_path, **kwargs)
         
         
 
@@ -101,7 +107,6 @@ class ResNetDataloader(dataloaderInterface):
                 # [Assertion] Assert that the sub-category exists
                 if not Path(data_dir + "/" + sub_category).exists():
                     print(f"[ERROR] Sub-category {sub_category} does not exist in data_dir directory \nSkipping this sub-category. Please check the config file and the data_dir directory.\n  data_dir: {data_dir}\n  Config file: {self.config_path}")
-                    print("hej")
                     sys.exit(1)
 
                 # Find all .png files in the data_dir directory for the sub-category
@@ -131,46 +136,63 @@ class ResNetDataloader(dataloaderInterface):
         return data_dict
     
 # --------------------------- Define augmentations --------------------------- #
-    def training_augmentations(self):
+    def training_augmentations(self, data_augmentations=False):
             # Preprocessing the datasets and DataLoaders creation.
-        spatial_augmentations = [
-            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
-            transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
-        ]
+        print(f"[INFO] Setting up training augmentations. Using data augmentations: {data_augmentations}")
+        if data_augmentations:
 
-        self.augmentations = transforms.Compose(
-            spatial_augmentations
-            + [
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
-        return self.augmentations
+            augmentations = build_image_augmentations(
+                config=self.config
+            )
+        else:
+
+            augmentations = self.base_augmentations() 
+        print(f"[INFO] Training augmentations set: {augmentations}")
+        return augmentations
+    
+# -------------------- Base transform (for synthetic data) ------------------- #
+    def base_augmentations(self):
+        """Minimal transform for synthetic data: resize + center crop + normalize.
+        No random augmentations (flips, random crops, color jitter, etc.)."""
+        self.base_aug = transforms.Compose([
+            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.Lambda(lambda x: x),
+            transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ])
+        return self.base_aug
     
 # ------------------------- Validation augmentations ------------------------- #
     def val_augmentations(self):
             # Preprocessing the datasets and DataLoaders creation.
         spatial_augmentations = [
+            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
         ]
 
-        self.augmentations = transforms.Compose(
+        augmentations = transforms.Compose(
             spatial_augmentations
             + [
                 transforms.ToTensor(),
                 transforms.Normalize([0.5], [0.5]),
             ]
         )
-        return self.augmentations
+        print(f"[INFO] Validation augmentations set: {augmentations}")
+        return augmentations
 
 # ------------- Transform images using the defined augmentations ------------- #
     def train_transform(self, examples):
         processed = []
-        for filepath in examples["filepath"]:
+        for filepath, split in zip(examples["filepath"], examples["split"]):
             # Import as image using PIL
-            image = Image.open(filepath)
-            processed.append(self.train_aug(image.convert("RGB")))
+            image = Image.open(filepath).convert("RGB")
+            if split == "synth":
+                # Synthetic images: only resize + center crop + normalize (no random augmentations)
+                processed.append(self.train_synthetic_aug(image))
+            else:
+                # Real images: full training augmentations
+                processed.append(self.train_aug(image))
         class_indices = [self.class_LUT[cls] for cls in examples["class"]]
         return {"image": processed, "class": class_indices}
     
@@ -224,7 +246,8 @@ class ResNetDataloader(dataloaderInterface):
         
         # --- Define augmentations --- #
         self.val_aug = self.val_augmentations()
-        self.train_aug = self.training_augmentations()
+        self.train_aug = self.training_augmentations(data_augmentations=self.data_augmentations_real)
+        self.train_synthetic_aug = self.training_augmentations(data_augmentations=self.data_augmentations_synthetic)
                   
         train_dataset.set_transform(self.train_transform)
         val_dataset.set_transform(self.val_transform)
@@ -232,8 +255,9 @@ class ResNetDataloader(dataloaderInterface):
         self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, generator=torch.Generator().manual_seed(self.seed)) 
         self.val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,generator=torch.Generator().manual_seed(self.seed)) 
         
-        if self.preview == True:
-            self.preview_dataloader(self.train_loader)
+        
+        self.preview_dataloader(self.train_loader, show=self.preview)
+            
         return self.train_loader
 
 
@@ -241,7 +265,7 @@ class ResNetDataloader(dataloaderInterface):
 #                                     Main                                     #
 # ---------------------------------------------------------------------------- #
 if __name__ == "__main__":    # Load config
-    config_path = "/media/aris/Data/master2025dev/aris_master/testing/config.json"
+    config_path = "/home/ap/cloud/Master/aris_master/queue/scheduled/TEST_DATA_AUGMENTATION.json"
     print(f"Loading config from: {config_path}")
     
-    dataloader = ResNetDataloader(config_path)
+    dataloader = ResNetDataloader(config_path=config_path, preview=True, real_image_count=1000, synthetic_image_count=1000)

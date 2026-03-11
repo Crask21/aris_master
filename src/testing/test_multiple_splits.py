@@ -210,12 +210,13 @@ if __name__ == "__main__":
                     config_path,
                     real_image_count=real_count,
                     synthetic_image_count=synthetic_count,
+                    preview=args.verbose
                 )
                 model = ResNet18Test(
                     config_path,
                     resnet_dataloader=dataloader,
                     output_dir=run_dir,
-                    resume_checkpoint_path=task["resume_checkpoint"],
+                    resume_checkpoint_path=task["resume_checkpoint"]
                 )
                 model.train()
                 model_instance = model
@@ -234,6 +235,7 @@ if __name__ == "__main__":
                     config_path,
                     real_image_count=real_count,
                     synthetic_image_count=synthetic_count,
+                    preview=args.verbose
                 )
                 evaluate_resnet18(
                     dataloader,
