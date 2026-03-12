@@ -15,7 +15,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_factor=False):
+def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_factor=False, only_show_mean=False):
     """
     Evaluate multiple ResNet18 runs in a directory and aggregate results.
     
@@ -23,6 +23,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_fact
         resnet18_runs_dir: Directory containing subdirectories for each run (each with a checkpoint and config)
         output_dir: Directory to save aggregated results (optional, will create 'multi_run_evaluation' in output dir if not provided)
         synthetic_real_factor: If True, create plots with synthetic/real ratio instead of synthetic/total
+        only_show_mean: If True, only show mean ± std without individual run scatter points
     """
     resnet18_runs_dir = Path(resnet18_runs_dir)
     
@@ -142,7 +143,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_fact
     logger.info(f"Multi-run results saved to: {output_path}")
     
     # Create summary plot
-    create_multi_run_plot(sorted_splits, output_dir, synthetic_real_factor)
+    create_multi_run_plot(sorted_splits, output_dir, synthetic_real_factor, only_show_mean)
     
     # Create bar chart comparing mean accuracy across splits
     bar_chart(sorted_splits, output_dir)
@@ -150,7 +151,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_fact
     logger.info("✓ Multi-run evaluation complete!")
     return multi_run_results
 
-def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
+def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False, only_show_mean=False):
     """
     Create visualization plots for multi-run results.
     
@@ -158,6 +159,7 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
         splits_data: List of split data dictionaries
         output_dir: Directory to save plots
         synthetic_real_factor: If True, create plots with synthetic/real ratio instead of synthetic/total
+        only_show_mean: If True, only show mean ± std without individual run scatter points
     """
     if not splits_data:
         logger.warning("No data to plot")
@@ -195,19 +197,20 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
         # === ACCURACY PLOT ===
         fig, ax = plt.subplots(figsize=(10, 6))
         
-        # Plot accuracy with individual runs
+        # Plot individual runs as scatter points (behind error bars)
+        if not only_show_mean:
+            for i, split_data in enumerate(splits):
+                run_accuracies = [run["accuracy"] for run in split_data["runs"]]
+                x_positions = [synthetic_counts[i]] * len(run_accuracies)
+                ax.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
+                           color='skyblue', edgecolors='black', linewidth=0.5, 
+                           zorder=1)
+        
+        # Plot accuracy with error bars (on top)
         ax.errorbar(synthetic_counts, mean_accuracies, yerr=std_accuracies, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
                     color='darkblue', markerfacecolor='red', 
-                    ecolor='gray', capthick=2, label='Mean ± Std')
-        
-        # Plot individual runs as scatter points
-        for i, split_data in enumerate(splits):
-            run_accuracies = [run["accuracy"] for run in split_data["runs"]]
-            x_positions = [synthetic_counts[i]] * len(run_accuracies)
-            ax.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
-                       color='skyblue', edgecolors='black', linewidth=0.5, 
-                       zorder=2)
+                    ecolor='gray', capthick=2, label='Mean ± Std', zorder=3)
         
         ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
         ax.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
@@ -248,18 +251,20 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
         # === F1 SCORE PLOT ===
         fig, ax = plt.subplots(figsize=(10, 6))
         
+        # Plot individual runs as scatter points (behind error bars)
+        if not only_show_mean:
+            for i, split_data in enumerate(splits):
+                run_f1_scores = [run["f1_score"] for run in split_data["runs"]]
+                x_positions = [synthetic_counts[i]] * len(run_f1_scores)
+                ax.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
+                           color='lightcoral', edgecolors='black', linewidth=0.5, 
+                           zorder=1)
+        
+        # Plot F1 score with error bars (on top)
         ax.errorbar(synthetic_counts, mean_f1_scores, yerr=std_f1_scores, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
                     color='darkred', markerfacecolor='red', 
-                    ecolor='gray', capthick=2, label='Mean ± Std')
-        
-        # Plot individual runs as scatter points
-        for i, split_data in enumerate(splits):
-            run_f1_scores = [run["f1_score"] for run in split_data["runs"]]
-            x_positions = [synthetic_counts[i]] * len(run_f1_scores)
-            ax.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
-                       color='lightcoral', edgecolors='black', linewidth=0.5, 
-                       zorder=2)
+                    ecolor='gray', capthick=2, label='Mean ± Std', zorder=3)
         
         ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
         ax.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
@@ -300,18 +305,20 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
         # === FACTOR-BASED ACCURACY PLOT ===
         fig, ax = plt.subplots(figsize=(10, 6))
         
+        # Plot individual runs as scatter points (behind error bars)
+        if not only_show_mean:
+            for i, split_data in enumerate(splits):
+                run_accuracies = [run["accuracy"] for run in split_data["runs"]]
+                x_positions = [factors[i]] * len(run_accuracies)
+                ax.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
+                           color='skyblue', edgecolors='black', linewidth=0.5, 
+                           zorder=1)
+        
+        # Plot factor-based accuracy with error bars (on top)
         ax.errorbar(factors, mean_accuracies, yerr=std_accuracies, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
                     color='darkblue', markerfacecolor='red', 
-                    ecolor='gray', capthick=2, label='Mean ± Std')
-        
-        # Plot individual runs as scatter points
-        for i, split_data in enumerate(splits):
-            run_accuracies = [run["accuracy"] for run in split_data["runs"]]
-            x_positions = [factors[i]] * len(run_accuracies)
-            ax.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
-                       color='skyblue', edgecolors='black', linewidth=0.5, 
-                       zorder=2)
+                    ecolor='gray', capthick=2, label='Mean ± Std', zorder=3)
         
         ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
         ax.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
@@ -352,18 +359,20 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
         # === FACTOR-BASED F1 SCORE PLOT ===
         fig, ax = plt.subplots(figsize=(10, 6))
         
+        # Plot individual runs as scatter points (behind error bars)
+        if not only_show_mean:
+            for i, split_data in enumerate(splits):
+                run_f1_scores = [run["f1_score"] for run in split_data["runs"]]
+                x_positions = [factors[i]] * len(run_f1_scores)
+                ax.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
+                           color='lightcoral', edgecolors='black', linewidth=0.5, 
+                           zorder=1)
+        
+        # Plot factor-based F1 score with error bars (on top)
         ax.errorbar(factors, mean_f1_scores, yerr=std_f1_scores, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
                     color='darkred', markerfacecolor='red', 
-                    ecolor='gray', capthick=2, label='Mean ± Std')
-        
-        # Plot individual runs as scatter points
-        for i, split_data in enumerate(splits):
-            run_f1_scores = [run["f1_score"] for run in split_data["runs"]]
-            x_positions = [factors[i]] * len(run_f1_scores)
-            ax.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
-                       color='lightcoral', edgecolors='black', linewidth=0.5, 
-                       zorder=2)
+                    ecolor='gray', capthick=2, label='Mean ± Std', zorder=3)
         
         ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
         ax.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
@@ -429,7 +438,8 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
             if synthetic_real_factor:
                 factors = [s / real_count if real_count > 0 else 0 for s in synthetic_counts]
             else:
-                factors = [s / (s + real_count) if (s + real_count) > 0 else 0 for s in synthetic_counts]
+                # Convert to percentage for synthetic/total
+                factors = [100 * s / (s + real_count) if (s + real_count) > 0 else 0 for s in synthetic_counts]
             
             # Collect for y-limits
             all_mean_accuracies.extend(mean_accuracies)
@@ -471,7 +481,7 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
         if synthetic_real_factor:
             factor_label = 'Synthetic/Real Ratio'
         else:
-            factor_label = 'Synthetic/Total Ratio'
+            factor_label = 'Synthetic/Total Ratio (%)'
         
         # Sort x-axis values
         sorted_synthetic_counts = sorted(all_synthetic_counts)
@@ -664,6 +674,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use synthetic/real ratio instead of synthetic/total for factor plots"
     )
+    parser.add_argument(
+        "--only-show-mean",
+        action="store_true",
+        help="Only show mean ± std without individual run scatter points"
+    )
     #args = ["--runs_dir", "/home/ap/cloud/Master/aris_master/testing/02-18_normal-wood_impregnated-wood_splits/resnet18_runs"]
     args = parser.parse_args()
-    multi_run_evaluation(args.runs_dir, args.output_dir, args.synthetic_real_factor)
+    multi_run_evaluation(args.runs_dir, args.output_dir, args.synthetic_real_factor, args.only_show_mean)
