@@ -1,24 +1,28 @@
 
-from seaborn.objects import Path
+# from seaborn.objects import Path
 import json
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 import os
 # Import parser args
 from argparse import ArgumentParser
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+    
 from src.utils.add_note import add_note
 import logging
 logger = logging.getLogger(__name__)
 
 
-def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
+def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_factor=False):
     """
     Evaluate multiple ResNet18 runs in a directory and aggregate results.
     
     Args:
         resnet18_runs_dir: Directory containing subdirectories for each run (each with a checkpoint and config)
         output_dir: Directory to save aggregated results (optional, will create 'multi_run_evaluation' in output dir if not provided)
+        synthetic_real_factor: If True, create plots with synthetic/real ratio instead of synthetic/total
     """
     resnet18_runs_dir = Path(resnet18_runs_dir)
     
@@ -138,7 +142,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
     logger.info(f"Multi-run results saved to: {output_path}")
     
     # Create summary plot
-    create_multi_run_plot(sorted_splits, output_dir)
+    create_multi_run_plot(sorted_splits, output_dir, synthetic_real_factor)
     
     # Create bar chart comparing mean accuracy across splits
     bar_chart(sorted_splits, output_dir)
@@ -146,13 +150,14 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None):
     logger.info("✓ Multi-run evaluation complete!")
     return multi_run_results
 
-def create_multi_run_plot(splits_data, output_dir):
+def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False):
     """
     Create visualization plots for multi-run results.
     
     Args:
         splits_data: List of split data dictionaries
         output_dir: Directory to save plots
+        synthetic_real_factor: If True, create plots with synthetic/real ratio instead of synthetic/total
     """
     if not splits_data:
         logger.warning("No data to plot")
@@ -166,7 +171,7 @@ def create_multi_run_plot(splits_data, output_dir):
             splits_by_real[real_count] = []
         splits_by_real[real_count].append(split_data)
     
-    # Create a plot for each real image count
+    # Create plots for each real image count
     for real_count, splits in splits_by_real.items():
         # Sort by synthetic count
         splits = sorted(splits, key=lambda x: x["synthetic_image_count"])
@@ -177,11 +182,21 @@ def create_multi_run_plot(splits_data, output_dir):
         mean_f1_scores = [s["mean_f1_score"] for s in splits]
         std_f1_scores = [s["std_f1_score"] for s in splits]
         
-        # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+        # Calculate factor based on flag
+        if synthetic_real_factor:
+            # synthetic/real
+            factors = [s / real_count if real_count > 0 else 0 for s in synthetic_counts]
+            factor_label = 'Synthetic/Real Ratio'
+        else:
+            # synthetic/total (default)
+            factors = [s / (s + real_count) if (s + real_count) > 0 else 0 for s in synthetic_counts]
+            factor_label = 'Synthetic/Total Ratio'
+        
+        # === ACCURACY PLOT ===
+        fig, ax = plt.subplots(figsize=(10, 6))
         
         # Plot accuracy with individual runs
-        ax1.errorbar(synthetic_counts, mean_accuracies, yerr=std_accuracies, 
+        ax.errorbar(synthetic_counts, mean_accuracies, yerr=std_accuracies, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
                     color='darkblue', markerfacecolor='red', 
                     ecolor='gray', capthick=2, label='Mean ± Std')
@@ -190,26 +205,50 @@ def create_multi_run_plot(splits_data, output_dir):
         for i, split_data in enumerate(splits):
             run_accuracies = [run["accuracy"] for run in split_data["runs"]]
             x_positions = [synthetic_counts[i]] * len(run_accuracies)
-            ax1.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
+            ax.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
                        color='skyblue', edgecolors='black', linewidth=0.5, 
                        zorder=2)
         
-        ax1.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
-        ax1.set_title(f'Accuracy vs Synthetic Images ({real_count} Real Images)', 
+        ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
+        ax.set_title(f'Accuracy vs Synthetic Images ({real_count} Real Images)', 
                      fontsize=14, fontweight='bold')
-        ax1.grid(True, alpha=0.3, linestyle='--')
-        ax1.set_ylim([0, 1])
-        ax1.legend(loc='best')
+        ax.set_xticks(synthetic_counts)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        
+        # Compute y-limits with padding
+        if std_accuracies:
+            y_min = min(m - s for m, s in zip(mean_accuracies, std_accuracies))
+            y_max = max(m + s for m, s in zip(mean_accuracies, std_accuracies))
+        else:
+            y_min = min(mean_accuracies)
+            y_max = max(mean_accuracies)
+        pad = max(0.02, (y_max - y_min) * 0.1)
+        ax.set_ylim(y_min - pad, y_max + pad)
         
         # Add value labels on the mean points
         for x, y in zip(synthetic_counts, mean_accuracies):
-            ax1.annotate(f'{y:.3f}', xy=(x, y), xytext=(0, 10), 
+            ax.annotate(f'{y:.3f}', xy=(x, y), xytext=(0, 10), 
                         textcoords='offset points', ha='center', 
                         fontsize=9, fontweight='bold')
         
-        # Plot F1 score with individual runs
-        ax2.errorbar(synthetic_counts, mean_f1_scores, yerr=std_f1_scores, 
+        plt.tight_layout()
+        accuracy_plot_path = output_dir / f"accuracy_vs_synthetic_{real_count}_real.png"
+        plt.savefig(accuracy_plot_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Accuracy vs Synthetic Images ({real_count} real images)",
+            content=accuracy_plot_path
+        )
+        plt.close()
+        logger.info(f"Accuracy plot saved to: {accuracy_plot_path}")
+        
+        # === F1 SCORE PLOT ===
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        ax.errorbar(synthetic_counts, mean_f1_scores, yerr=std_f1_scores, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
                     color='darkred', markerfacecolor='red', 
                     ecolor='gray', capthick=2, label='Mean ± Std')
@@ -218,43 +257,164 @@ def create_multi_run_plot(splits_data, output_dir):
         for i, split_data in enumerate(splits):
             run_f1_scores = [run["f1_score"] for run in split_data["runs"]]
             x_positions = [synthetic_counts[i]] * len(run_f1_scores)
-            ax2.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
+            ax.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
                        color='lightcoral', edgecolors='black', linewidth=0.5, 
                        zorder=2)
         
-        ax2.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
-        ax2.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
-        ax2.set_title(f'F1 Score vs Synthetic Images ({real_count} Real Images)', 
+        ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+        ax.set_title(f'F1 Score vs Synthetic Images ({real_count} Real Images)', 
                      fontsize=14, fontweight='bold')
-        ax2.grid(True, alpha=0.3, linestyle='--')
-        ax2.set_ylim([0, 1])
-        ax2.legend(loc='best')
+        ax.set_xticks(synthetic_counts)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        
+        # Compute y-limits with padding
+        if std_f1_scores:
+            y_min = min(m - s for m, s in zip(mean_f1_scores, std_f1_scores))
+            y_max = max(m + s for m, s in zip(mean_f1_scores, std_f1_scores))
+        else:
+            y_min = min(mean_f1_scores)
+            y_max = max(mean_f1_scores)
+        pad = max(0.02, (y_max - y_min) * 0.1)
+        ax.set_ylim(y_min - pad, y_max + pad)
         
         # Add value labels on the mean points
         for x, y in zip(synthetic_counts, mean_f1_scores):
-            ax2.annotate(f'{y:.3f}', xy=(x, y), xytext=(0, 10), 
+            ax.annotate(f'{y:.3f}', xy=(x, y), xytext=(0, 10), 
                         textcoords='offset points', ha='center', 
                         fontsize=9, fontweight='bold')
         
         plt.tight_layout()
-        
-        # Save plot
-        plot_path = output_dir / f"accuracy_f1_vs_synthetic_{real_count}_real.png"
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        f1_plot_path = output_dir / f"f1_vs_synthetic_{real_count}_real.png"
+        plt.savefig(f1_plot_path, dpi=300, bbox_inches='tight')
         add_note(
             notes_path=output_dir / "../notes.md",
-            title=f"Accuracy and F1 Score vs Synthetic Images in Connected dot plot",
-            content=plot_path
+            title=f"F1 Score vs Synthetic Images ({real_count} real images)",
+            content=f1_plot_path
         )
         plt.close()
+        logger.info(f"F1 plot saved to: {f1_plot_path}")
         
-        logger.info(f"Plot saved to: {plot_path}")
+        # === FACTOR-BASED ACCURACY PLOT ===
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        ax.errorbar(factors, mean_accuracies, yerr=std_accuracies, 
+                    fmt='o-', markersize=8, capsize=5, linewidth=2, 
+                    color='darkblue', markerfacecolor='red', 
+                    ecolor='gray', capthick=2, label='Mean ± Std')
+        
+        # Plot individual runs as scatter points
+        for i, split_data in enumerate(splits):
+            run_accuracies = [run["accuracy"] for run in split_data["runs"]]
+            x_positions = [factors[i]] * len(run_accuracies)
+            ax.scatter(x_positions, run_accuracies, alpha=0.4, s=80, 
+                       color='skyblue', edgecolors='black', linewidth=0.5, 
+                       zorder=2)
+        
+        ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
+        ax.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
+        ax.set_title(f'Accuracy vs {factor_label} ({real_count} Real Images)', 
+                     fontsize=14, fontweight='bold')
+        ax.set_xticks(factors)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        
+        # Compute y-limits with padding
+        if std_accuracies:
+            y_min = min(m - s for m, s in zip(mean_accuracies, std_accuracies))
+            y_max = max(m + s for m, s in zip(mean_accuracies, std_accuracies))
+        else:
+            y_min = min(mean_accuracies)
+            y_max = max(mean_accuracies)
+        pad = max(0.02, (y_max - y_min) * 0.1)
+        ax.set_ylim(y_min - pad, y_max + pad)
+        
+        # Add value labels on the mean points
+        for x, y in zip(factors, mean_accuracies):
+            ax.annotate(f'{y:.3f}', xy=(x, y), xytext=(0, 10), 
+                        textcoords='offset points', ha='center', 
+                        fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        factor_plot_path = output_dir / f"accuracy_vs_factor_{real_count}_real.png"
+        plt.savefig(factor_plot_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Accuracy vs {factor_label} ({real_count} real images)",
+            content=factor_plot_path
+        )
+        plt.close()
+        logger.info(f"Factor-based accuracy plot saved to: {factor_plot_path}")
+        
+        # === FACTOR-BASED F1 SCORE PLOT ===
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        ax.errorbar(factors, mean_f1_scores, yerr=std_f1_scores, 
+                    fmt='o-', markersize=8, capsize=5, linewidth=2, 
+                    color='darkred', markerfacecolor='red', 
+                    ecolor='gray', capthick=2, label='Mean ± Std')
+        
+        # Plot individual runs as scatter points
+        for i, split_data in enumerate(splits):
+            run_f1_scores = [run["f1_score"] for run in split_data["runs"]]
+            x_positions = [factors[i]] * len(run_f1_scores)
+            ax.scatter(x_positions, run_f1_scores, alpha=0.4, s=80, 
+                       color='lightcoral', edgecolors='black', linewidth=0.5, 
+                       zorder=2)
+        
+        ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+        ax.set_title(f'F1 Score vs {factor_label} ({real_count} Real Images)', 
+                     fontsize=14, fontweight='bold')
+        ax.set_xticks(factors)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        
+        # Compute y-limits with padding
+        if std_f1_scores:
+            y_min = min(m - s for m, s in zip(mean_f1_scores, std_f1_scores))
+            y_max = max(m + s for m, s in zip(mean_f1_scores, std_f1_scores))
+        else:
+            y_min = min(mean_f1_scores)
+            y_max = max(mean_f1_scores)
+        pad = max(0.02, (y_max - y_min) * 0.1)
+        ax.set_ylim(y_min - pad, y_max + pad)
+        
+        # Add value labels on the mean points
+        for x, y in zip(factors, mean_f1_scores):
+            ax.annotate(f'{y:.3f}', xy=(x, y), xytext=(0, 10), 
+                        textcoords='offset points', ha='center', 
+                        fontsize=9, fontweight='bold')
+        
+        plt.tight_layout()
+        factor_f1_plot_path = output_dir / f"f1_vs_factor_{real_count}_real.png"
+        plt.savefig(factor_f1_plot_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"F1 Score vs {factor_label} ({real_count} real images)",
+            content=factor_f1_plot_path
+        )
+        plt.close()
+        logger.info(f"Factor-based F1 plot saved to: {factor_f1_plot_path}")
     
     # Create combined plot if there are multiple real counts
     if len(splits_by_real) > 1:
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-        
         colors = plt.cm.tab10(np.linspace(0, 1, len(splits_by_real)))
+        
+        # Collect all values for y-limit calculation and unique x values
+        all_mean_accuracies = []
+        all_std_accuracies = []
+        all_mean_f1_scores = []
+        all_std_f1_scores = []
+        all_synthetic_counts = set()
+        all_factors = set()
+        
+        # Store data per real_count for plotting
+        plot_data = []
         
         for idx, (real_count, splits) in enumerate(sorted(splits_by_real.items())):
             splits = sorted(splits, key=lambda x: x["synthetic_image_count"])
@@ -265,47 +425,181 @@ def create_multi_run_plot(splits_data, output_dir):
             mean_f1_scores = [s["mean_f1_score"] for s in splits]
             std_f1_scores = [s["std_f1_score"] for s in splits]
             
-            # Plot accuracy
-            ax1.errorbar(synthetic_counts, mean_accuracies, yerr=std_accuracies,
-                        fmt='o-', markersize=8, capsize=5, linewidth=2,
-                        color=colors[idx], label=f'{real_count} Real Images',
-                        capthick=2)
+            # Calculate factor based on flag
+            if synthetic_real_factor:
+                factors = [s / real_count if real_count > 0 else 0 for s in synthetic_counts]
+            else:
+                factors = [s / (s + real_count) if (s + real_count) > 0 else 0 for s in synthetic_counts]
             
-            # Plot F1 score
-            ax2.errorbar(synthetic_counts, mean_f1_scores, yerr=std_f1_scores,
-                        fmt='o-', markersize=8, capsize=5, linewidth=2,
-                        color=colors[idx], label=f'{real_count} Real Images',
-                        capthick=2)
+            # Collect for y-limits
+            all_mean_accuracies.extend(mean_accuracies)
+            all_std_accuracies.extend(std_accuracies)
+            all_mean_f1_scores.extend(mean_f1_scores)
+            all_std_f1_scores.extend(std_f1_scores)
+            all_synthetic_counts.update(synthetic_counts)
+            all_factors.update(factors)
+            
+            plot_data.append({
+                'real_count': real_count,
+                'synthetic_counts': synthetic_counts,
+                'mean_accuracies': mean_accuracies,
+                'std_accuracies': std_accuracies,
+                'mean_f1_scores': mean_f1_scores,
+                'std_f1_scores': std_f1_scores,
+                'factors': factors,
+                'color': colors[idx]
+            })
         
-        ax1.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
-        ax1.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
-        ax1.set_title('Accuracy vs Synthetic Images (All Real Counts)', 
-                     fontsize=14, fontweight='bold')
-        ax1.grid(True, alpha=0.3, linestyle='--')
-        ax1.set_ylim([0, 1])
-        ax1.legend(loc='best')
+        # Compute combined y-limits from all data
+        if all_std_accuracies:
+            acc_y_min = min(m - s for m, s in zip(all_mean_accuracies, all_std_accuracies))
+            acc_y_max = max(m + s for m, s in zip(all_mean_accuracies, all_std_accuracies))
+        else:
+            acc_y_min = min(all_mean_accuracies)
+            acc_y_max = max(all_mean_accuracies)
+        acc_pad = max(0.02, (acc_y_max - acc_y_min) * 0.1)
         
-        ax2.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
-        ax2.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
-        ax2.set_title('F1 Score vs Synthetic Images (All Real Counts)', 
+        if all_std_f1_scores:
+            f1_y_min = min(m - s for m, s in zip(all_mean_f1_scores, all_std_f1_scores))
+            f1_y_max = max(m + s for m, s in zip(all_mean_f1_scores, all_std_f1_scores))
+        else:
+            f1_y_min = min(all_mean_f1_scores)
+            f1_y_max = max(all_mean_f1_scores)
+        f1_pad = max(0.02, (f1_y_max - f1_y_min) * 0.1)
+        
+        # Determine factor label
+        if synthetic_real_factor:
+            factor_label = 'Synthetic/Real Ratio'
+        else:
+            factor_label = 'Synthetic/Total Ratio'
+        
+        # Sort x-axis values
+        sorted_synthetic_counts = sorted(all_synthetic_counts)
+        sorted_factors = sorted(all_factors)
+        
+        # === COMBINED ACCURACY PLOT (by synthetic count) ===
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        for data in plot_data:
+            ax.errorbar(data['synthetic_counts'], data['mean_accuracies'], 
+                       yerr=data['std_accuracies'],
+                       fmt='o-', markersize=8, capsize=5, linewidth=2,
+                       color=data['color'], label=f'{data["real_count"]} Real Images',
+                       capthick=2)
+        
+        ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
+        ax.set_title('Accuracy vs Synthetic Images (All Real Counts)', 
                      fontsize=14, fontweight='bold')
-        ax2.grid(True, alpha=0.3, linestyle='--')
-        ax2.set_ylim([0, 1])
-        ax2.legend(loc='best')
+        ax.set_xticks(sorted_synthetic_counts)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        ax.set_ylim(acc_y_min - acc_pad, acc_y_max + acc_pad)
         
         plt.tight_layout()
-        
-        combined_plot_path = output_dir / "accuracy_f1_vs_synthetic_combined.png"
-        plt.savefig(combined_plot_path, dpi=300, bbox_inches='tight')
-        
+        combined_acc_plot_path = output_dir / "accuracy_vs_synthetic_combined.png"
+        plt.savefig(combined_acc_plot_path, dpi=300, bbox_inches='tight')
         add_note(
             notes_path=output_dir / "../notes.md",
-            title=f"Combined Accuracy and F1 Score vs Synthetic Images in Connected dot plot",
-            content=combined_plot_path
+            title=f"Combined Accuracy vs Synthetic Images",
+            content=combined_acc_plot_path
         )
         plt.close()
+        logger.info(f"Combined accuracy plot saved to: {combined_acc_plot_path}")
         
-        logger.info(f"Combined plot saved to: {combined_plot_path}")
+        # === COMBINED F1 PLOT (by synthetic count) ===
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        for data in plot_data:
+            ax.errorbar(data['synthetic_counts'], data['mean_f1_scores'], 
+                       yerr=data['std_f1_scores'],
+                       fmt='o-', markersize=8, capsize=5, linewidth=2,
+                       color=data['color'], label=f'{data["real_count"]} Real Images',
+                       capthick=2)
+        
+        ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+        ax.set_title('F1 Score vs Synthetic Images (All Real Counts)', 
+                     fontsize=14, fontweight='bold')
+        ax.set_xticks(sorted_synthetic_counts)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        ax.set_ylim(f1_y_min - f1_pad, f1_y_max + f1_pad)
+        
+        plt.tight_layout()
+        combined_f1_plot_path = output_dir / "f1_vs_synthetic_combined.png"
+        plt.savefig(combined_f1_plot_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Combined F1 Score vs Synthetic Images",
+            content=combined_f1_plot_path
+        )
+        plt.close()
+        logger.info(f"Combined F1 plot saved to: {combined_f1_plot_path}")
+        
+        # === COMBINED ACCURACY PLOT (by factor) ===
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        for data in plot_data:
+            ax.errorbar(data['factors'], data['mean_accuracies'], 
+                       yerr=data['std_accuracies'],
+                       fmt='o-', markersize=8, capsize=5, linewidth=2,
+                       color=data['color'], label=f'{data["real_count"]} Real Images',
+                       capthick=2)
+        
+        ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
+        ax.set_ylabel('Accuracy', fontsize=12, fontweight='bold')
+        ax.set_title(f'Accuracy vs {factor_label} (All Real Counts)', 
+                     fontsize=14, fontweight='bold')
+        ax.set_xticks(sorted_factors)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        ax.set_ylim(acc_y_min - acc_pad, acc_y_max + acc_pad)
+        
+        plt.tight_layout()
+        combined_factor_acc_path = output_dir / "accuracy_vs_factor_combined.png"
+        plt.savefig(combined_factor_acc_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Combined Accuracy vs {factor_label}",
+            content=combined_factor_acc_path
+        )
+        plt.close()
+        logger.info(f"Combined factor-based accuracy plot saved to: {combined_factor_acc_path}")
+        
+        # === COMBINED F1 PLOT (by factor) ===
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        for data in plot_data:
+            ax.errorbar(data['factors'], data['mean_f1_scores'], 
+                       yerr=data['std_f1_scores'],
+                       fmt='o-', markersize=8, capsize=5, linewidth=2,
+                       color=data['color'], label=f'{data["real_count"]} Real Images',
+                       capthick=2)
+        
+        ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
+        ax.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+        ax.set_title(f'F1 Score vs {factor_label} (All Real Counts)', 
+                     fontsize=14, fontweight='bold')
+        ax.set_xticks(sorted_factors)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='both')
+        ax.set_axisbelow(True)
+        ax.legend(loc='best')
+        ax.set_ylim(f1_y_min - f1_pad, f1_y_max + f1_pad)
+        
+        plt.tight_layout()
+        combined_factor_f1_path = output_dir / "f1_vs_factor_combined.png"
+        plt.savefig(combined_factor_f1_path, dpi=300, bbox_inches='tight')
+        add_note(
+            notes_path=output_dir / "../notes.md",
+            title=f"Combined F1 Score vs {factor_label}",
+            content=combined_factor_f1_path
+        )
+        plt.close()
+        logger.info(f"Combined factor-based F1 plot saved to: {combined_factor_f1_path}")
     
 def bar_chart(splits_data, output_dir):
     """
@@ -365,6 +659,11 @@ if __name__ == "__main__":
         default=None,
         help="Directory to save aggregated results and plots (optional, will create 'multi_run_evaluation' in runs dir if not provided)"
     )
+    parser.add_argument(
+        "--synthetic-real-factor",
+        action="store_true",
+        help="Use synthetic/real ratio instead of synthetic/total for factor plots"
+    )
     #args = ["--runs_dir", "/home/ap/cloud/Master/aris_master/testing/02-18_normal-wood_impregnated-wood_splits/resnet18_runs"]
     args = parser.parse_args()
-    multi_run_evaluation(args.runs_dir, args.output_dir)
+    multi_run_evaluation(args.runs_dir, args.output_dir, args.synthetic_real_factor)
