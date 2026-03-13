@@ -6,7 +6,6 @@ from diffusers.utils import is_tensorboard_available, logging
 from diffusers.training_utils import EMAModel
 from diffusers.optimization import get_scheduler
 from huggingface_hub import upload_folder
-import wandb
 from waste_diffuser.parse_args import parse_args
 from waste_diffuser.dataloader_interface import dataloaderInterface
 
@@ -304,9 +303,10 @@ class training:
                 images_processed = self.inference(unet,
                                                 scheduler=self.noise_scheduler,
                                                 )
+                print(images_processed.shape)
 
                 tracker = self.accelerator.get_tracker("tensorboard", unwrap=True)
-                tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+                tracker.add_images("test_samples", images_processed, epoch)
             
             if epoch % self.config["logging"]["save_model_epochs"] == 0 or epoch == self.config["hyperparameters"]["epochs"] - 1:
                 # save the model
@@ -550,8 +550,12 @@ class training:
         images = latents
         self.logger.info(f"Generated latents shape: {images.shape}")
         
+        # if type(images) == torch.Tensor:
+        if type(images) == torch.Tensor:
+            images = images.cpu().numpy()
+        
         # denormalize the images (VAE outputs are in [-1, 1] range)
-        images_processed = ((images / 2 + 0.5).clip(0, 1) * 255).round().astype("uint8")
+        images_processed = np.array(((images / 2 + 0.5).clip(0, 1) * 255).round()).astype("uint8")
         return images_processed
     
     def display_batch(self, batch, num_images=9):

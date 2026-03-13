@@ -41,9 +41,11 @@
     "debug": false
   },
   "data": {
-    "resolution": 256,
+    "resolution": 128,
     "center_crop": true,
     "random_flip": true,
+    "custom_dataset_name": null,
+    "max_images_per_class": null,
     "classes": {
       "impregnated_wood": {
         "data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories",

@@ -30,6 +30,7 @@ def plan_pending_runs(config, runs_dir):
         action   - "train" | "resume" | "evaluate"
         resume_checkpoint - path string (only when action == "resume")
     """
+    logger.debug(f"Config: {config}")
     real_image_counts = config["evaluation"]["splits"]["real_image_counts"]
     synthetic_image_counts = config["evaluation"]["splits"]["synthetic_image_counts"]
     splits = list(zip(real_image_counts, synthetic_image_counts))
