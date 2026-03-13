@@ -1,5 +1,4 @@
 training/
-testing/
 queue/
 
 # -------------------- VS Code python .gitignore template -------------------- #
@@ -8,7 +7,6 @@ __pycache__/
 *.py[codz]
 *$py.class
 models/
-testing/
 queue/
 
 # C extensions

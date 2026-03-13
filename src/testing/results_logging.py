@@ -43,6 +43,9 @@ class ResultsLogger:
         self.dependent_variables = evaluation.get(
             "metrics", ["val_accuracy"]
         )
+        logger.debug(f"Initial dependent variables from config: {self.dependent_variables}")
+
+        
         if isinstance(self.dependent_variables, str):
             self.dependent_variables = [self.dependent_variables]
 
@@ -66,6 +69,9 @@ class ResultsLogger:
                 value = value[key]
             else:
                 return None
+        logger.debug(f"Resolving config value for path '{dotted_path}'")
+        logger.debug(f"Resolved value: {value}")
+
         return value
 
     @staticmethod
@@ -83,15 +89,19 @@ class ResultsLogger:
         """Return True when the independent variable is the synthetic count."""
         ind_var = (self.config.get("evaluation", {})
                    .get("independent_variable", ""))
-        return ind_var == "evaluation.splits.synthetic_image_count"
+        return ind_var == "evaluation.splits.synthetic_image_counts"
 
     def get_independent_variable_value(self, real_count, synthetic_count):
         """Derive the independent-variable value for a specific split."""
+        logger.debug(self.config["evaluation"].keys())
         ind_var = (self.config.get("evaluation", {})
                    .get("independent_variable", ""))
-        if ind_var == "evaluation.splits.synthetic_image_count":
+        logger.debug("Getting independent variable value for "
+              f"real_count={real_count}, synthetic_count={synthetic_count} "
+              f"with independent_variable='{ind_var}'")
+        if ind_var == "evaluation.splits.synthetic_image_counts":
             return synthetic_count
-        if ind_var == "evaluation.splits.real_image_count":
+        if ind_var == "evaluation.splits.real_image_counts":
             return real_count
         value = self._resolve_config_value(self.config, ind_var)
         if value is None:

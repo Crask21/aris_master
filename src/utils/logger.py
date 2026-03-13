@@ -45,6 +45,8 @@ def initialize_logger(level: int = logging.DEBUG) -> None:
 
     root_logger.addHandler(handler)
     root_logger.setLevel(level)
+    if level == logging.DEBUG:   
+        root_logger.debug("Logger initialized with DEBUG level")
 
     # Silence noisy libraries 
     logging.getLogger("matplotlib").setLevel(logging.WARNING)

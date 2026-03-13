@@ -11,8 +11,12 @@ from datasets import load_dataset
 import PIL.Image as Image
 from pathlib import Path
 import logging      
+try:
+    from .augmentations import build_image_augmentations
+except ImportError:
+    from src.waste_diffuser.augmentations import build_image_augmentations
 logger = logging.getLogger(__name__)
-
+from src.utils.add_note import add_note
 # ---------------------------------------------------------------------------- #
 #                                     Class                                    #
 # ---------------------------------------------------------------------------- #
@@ -244,12 +248,13 @@ class dataloaderInterface:
             logger.info(f"Using image dataset with resolution {self.resolution} and augmentations: center_crop={self.center_crop}, random_flip={self.random_flip}")
             # --- Define augmentations --- #
             # Preprocessing the datasets and DataLoaders creation.
+            
+            
             spatial_augmentations = [
                 transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
                 transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
                 transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
             ]
-
             self.augmentations = transforms.Compose(
                 spatial_augmentations
                 + [
@@ -260,9 +265,8 @@ class dataloaderInterface:
                     
             dataset.set_transform(self.transform_images)
             self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
-            if self.preview == True:
-                self.preview_dataloader(self.dataloader)
-                self.print_dataset_summary(data_dict)
+            self.preview_dataloader(self.dataloader, show=self.preview)
+            self.print_dataset_summary(data_dict)
         else:
             logger.info(f"Using VAE latent dataset with resolution {self.resolution}")
             # For VAE latents, we don't need to apply augmentations, but we still need to load the data and create a dataloader
@@ -275,7 +279,7 @@ class dataloaderInterface:
         
     
 # ---------------------------- Preview dataloader ---------------------------- #
-    def preview_dataloader(self, dataloader, num_images=16, labels=True):
+    def preview_dataloader(self, dataloader, num_images=16, labels=True, show = True):
         """
         Preview images from the dataloader in a grid.
         
@@ -318,7 +322,9 @@ class dataloaderInterface:
         output_path = os.path.join(self.output_dir, "dataloader_preview.png")
         plt.savefig(output_path)
         logger.info(f"Dataloader preview saved to {output_path}")
-        plt.show()
+        add_note(notes_path = os.path.join(self.output_dir, "notes.md"), title="Dataloader preview", content = output_path)
+        if show: 
+            plt.show()
 
 # ------------------------- Dataset summary function ------------------------- #
     def _format_percentage(self, numerator, denominator):
