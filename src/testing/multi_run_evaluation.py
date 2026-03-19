@@ -192,6 +192,8 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False, 
         else:
             # synthetic/total (default)
             factors = [s / (s + real_count) if (s + real_count) > 0 else 0 for s in synthetic_counts]
+            # Round factors to 3 decimal places for better x-tick labels
+            factors = [round(f, 3) for f in factors]
             factor_label = 'Synthetic/Total Ratio'
         
         # === ACCURACY PLOT ===
