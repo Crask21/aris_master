@@ -16,8 +16,10 @@ def main(resolution=128, dataset_dir="/media/aris/Data/master2025dev/datasets/wo
     vae = vae.to("cuda")
 
     
+    # Rotate the images 90 degrees clockwise and convert to tensor
     transform = transforms.Compose([
         transforms.Resize((resolution, resolution)),
+        transforms.Lambda(lambda img: img.rotate(-90)),
         transforms.ToTensor(),
         transforms.Normalize([0.5], [0.5]),
     ])
@@ -28,8 +30,9 @@ def main(resolution=128, dataset_dir="/media/aris/Data/master2025dev/datasets/wo
     
         
 
-    # Process the images in batches and save the latents
-    for i, (images, labels) in enumerate(dataloader):
+    # Process the images in batches and save the latents using tqdm
+    from tqdm import tqdm
+    for i, (images, _) in enumerate(tqdm(dataloader, desc="Processing batches")):
         images = images.to("cuda")
         with torch.no_grad():
             latents = vae.encode(images).latent_dist.sample() * vae.config.scaling_factor
@@ -48,7 +51,7 @@ def main(resolution=128, dataset_dir="/media/aris/Data/master2025dev/datasets/wo
             
             latent_path = os.path.join(class_latents_dir, f"{original_filename}.pt")
             torch.save(latents[j].cpu(), latent_path)
-            print(f"Saved {latent_path}")
+            # print(f"Saved {latent_path}")
     
     #Quality check: load a random latent and decode it back to an image
     random_latent_path = os.path.join(dataset_dir, dataset.classes[0], f"latents_{resolution}", os.listdir(os.path.join(dataset_dir, dataset.classes[0], f"latents_{resolution}"))[0])
@@ -65,5 +68,5 @@ def main(resolution=128, dataset_dir="/media/aris/Data/master2025dev/datasets/wo
             
 
 if __name__ == "__main__":
-    resolution = 512
+    resolution = 256
     main(resolution, dataset_dir=f"/media/aris/Data/master2025dev/datasets/wood/4_main_categories/train")
