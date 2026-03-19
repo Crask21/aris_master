@@ -45,6 +45,7 @@ class dataloaderInterface:
         self.synthetic = synthetic
         self.vae_latents = vae_latents
         self.data_file = data_file
+        
         # Setup logger
         if not logger.hasHandlers():
             #"%(levelname)s - %(message)s"
@@ -64,7 +65,10 @@ class dataloaderInterface:
             self.num_workers = self.config["hyperparameters"]["dataloader_num_workers"]
         # Check if vae
         if vae_latents is None:
-            self.vae_latents = self.config.get("vae_latents", False)  # Default to False if not specified in config
+            self.vae_latents = self.config["vae"]["use_vae"]  # Default to False if not specified in config
+        
+        # limit the number of images per class if max_images_per_class is specified in the config file
+        self.max_images_per_class = self.data_config["max_images_per_class"]
             
         # Set classes and number of classes from config file
         self.classes = list(self.data_config["classes"].keys())
@@ -121,22 +125,50 @@ class dataloaderInterface:
                 
                 # Find all .png files in the data_dir directory for the sub-category
                 sub_category_path = os.path.join(data_dir, sub_category)
+                
+                # image count variable for limiting the number of images per class if max_images_per_class is specified in the config file
+                image_count = 0
                 # Look globally in the folder in recursive way for .png files
                 for root, dirs, files in os.walk(sub_category_path):
                     if self.vae_latents == True:
-                        if root.endswith(f"latents_{self.resolution}"):
+                        if self.data_config["custom_dataset_name"] is not None:
+                            if root.endswith(self.data_config["custom_dataset_name"]):
+                                print(f"Found custom dataset folder: {root}")
+                                for file in files:
+                                    if file.endswith(".pt"):
+                                        latent_file = os.path.join(root, file)
+                                        sample = {"filepath": latent_file, "class": category, "split": split}
+                                        data_dict.append(sample)
+                                        image_count += 1
+                                    if self.max_images_per_class is not None and image_count >= self.max_images_per_class:
+                                        break
+                                    
+                        elif root.endswith(f"latents_{self.resolution}") and self.data_config["custom_dataset_name"] is None:
+                            print(f"Found latents folder: {root}")
                             for file in files:
                                 if file.endswith(".pt"):
                                     latent_file = os.path.join(root, file)
                                     sample = {"filepath": latent_file, "class": category, "split": split}
                                     data_dict.append(sample)
+                                    image_count += 1
+                                if self.max_images_per_class is not None and image_count >= self.max_images_per_class:
+                                    break
                     else:
+                        print(f"Looking for images in: {root}")
                         for file in files:
                             if file.endswith(".png"):
-                                
                                 image_file = os.path.join(root, file)
                                 sample = {"filepath": image_file, "class": category, "split": split}
-                                data_dict.append(sample)  
+                                data_dict.append(sample) 
+                                image_count += 1
+                            if self.max_images_per_class is not None and image_count >= self.max_images_per_class:
+                                break
+                                
+                    if self.max_images_per_class is not None and image_count >= self.max_images_per_class:
+                        logger.info(f"Reached max_images_per_class limit for class {category}. Stopping search for this class.")
+                        break 
+        
+        print(f"Generated data dictionary for split '{split}' with {len(data_dict)} samples.")
         return data_dict
 
 
@@ -169,6 +201,19 @@ class dataloaderInterface:
             logger.info(f"Loaded {len(train_dict)} training samples from data file.")
         else:
             train_dict = self.generate_data_split(split="train")
+            
+        # if self.max_images_per_class is not None:
+        #     logger.info(f"Limiting to {self.max_images_per_class} images per class.")
+        #     class_counts = {cls: 0 for cls in self.classes}
+        #     limited_train_dict = []
+        #     for sample in train_dict:
+        #         cls = sample["class"]
+        #         if class_counts[cls] < self.max_images_per_class:
+        #             limited_train_dict.append(sample)
+        #             class_counts[cls] += 1
+        #     train_dict = limited_train_dict
+        #     logger.info(f"After limiting, {len(train_dict)} training samples remain.")
+                
         val_dict = self.generate_data_split(split="val")
         
         data_dict = train_dict + val_dict
