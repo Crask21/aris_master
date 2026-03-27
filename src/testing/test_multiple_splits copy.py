@@ -19,22 +19,6 @@ from multi_run_evaluation import multi_run_evaluation
 from results_logging import ResultsLogger
 
 
-def has_test_split(config):
-    """Return True if all configured classes have a usable test split directory."""
-    classes = config["data"]["classes"]
-
-    for class_config in classes.values():
-        test_root = Path(class_config["data_dir"]) / "test"
-        if not test_root.exists():
-            return False
-
-        for sub_category in class_config["sub_categories"]:
-            if not (test_root / sub_category).exists():
-                return False
-
-    return True
-
-
 
 def plan_pending_runs(config, runs_dir):
     """
@@ -53,8 +37,6 @@ def plan_pending_runs(config, runs_dir):
     training_runs_per_split = config["evaluation"]["training_runs_per_split"]
 
     pending = []
-    expect_test_evaluation = has_test_split(config)
-    logger.info(f"Test split detected: {expect_test_evaluation}")
 
     for real_count, synthetic_count in splits:
         for run_number in range(1, training_runs_per_split + 1):
@@ -69,8 +51,7 @@ def plan_pending_runs(config, runs_dir):
 
             latest_ckpt = run_dir / "resnet18_latest.ckpt"
             final_ckpts = list(run_dir.glob("resnet18_final_*.ckpt"))
-            eval_summary_val = run_dir / "evaluation" / "evaluation_summary_val.json"
-            eval_summary_test = run_dir / "evaluation" / "evaluation_summary_test.json"
+            eval_summary = run_dir / "evaluation" / "evaluation_summary_val.json"
 
             if latest_ckpt.exists():
                 # resnet18_latest.ckpt is renamed to resnet18_final_* when
@@ -83,19 +64,14 @@ def plan_pending_runs(config, runs_dir):
                                      run_dir, action="resume",
                                      resume_checkpoint=str(latest_ckpt)))
 
-            elif final_ckpts and (
-                not eval_summary_val.exists()
-                or (expect_test_evaluation and not eval_summary_test.exists())
-            ):
+            elif final_ckpts and not eval_summary.exists():
                 # Training finished (final checkpoint exists) but evaluation
                 # was not completed.
                 logger.info(f"[EVAL]   {run_name} — training complete, evaluation missing")
                 pending.append(_task(real_count, synthetic_count, run_number,
                                      run_dir, action="evaluate"))
 
-            elif eval_summary_val.exists() and (
-                not expect_test_evaluation or eval_summary_test.exists()
-            ):
+            elif eval_summary.exists():
                 # Fully done — nothing to do.
                 logger.info(f"[DONE]   {run_name}")
 
@@ -194,7 +170,6 @@ if __name__ == "__main__":
 
     # ---- Plan work: figure out what's already done vs. what's pending ----
     pending_tasks = plan_pending_runs(config, runs_dir)
-    has_test_split_available = has_test_split(config)
 
     if not pending_tasks:
         logger.info("All runs already completed — nothing to do.")
@@ -263,35 +238,18 @@ if __name__ == "__main__":
                     synthetic_image_count=synthetic_count,
                     preview=args.verbose
                 )
-                eval_dir = Path(run_dir) / "evaluation"
-                val_summary_path = eval_dir / "evaluation_summary_val.json"
-                test_summary_path = eval_dir / "evaluation_summary_test.json"
-
-                if not val_summary_path.exists():
-                    evaluate_resnet18(
-                        dataloader,
-                        checkpoint_dir=run_dir,
-                        best_checkpoint="lowest_val_loss",
-                        split_name="val",
-                    )
-                else:
-                    logger.info("[SKIP] Validation evaluation already exists")
-
-                if has_test_split_available:
-                    if not test_summary_path.exists():
-                        evaluate_resnet18(
-                            dataloader,
-                            checkpoint_dir=run_dir,
-                            best_checkpoint="lowest_val_loss",
-                            split_name="test",
-                        )
-                    else:
-                        logger.info("[SKIP] Test evaluation already exists")
+                evaluate_resnet18(
+                    dataloader,
+                    checkpoint_dir=run_dir,
+                    best_checkpoint="lowest_val_loss",
+                )
 
                 # ---- Log dependent-variable metrics to results.json ----
+                eval_summary_path = (Path(run_dir) / "evaluation"
+                                     / "evaluation_summary_val.json")
                 results_logger.log_run(
                     run_number, real_count, synthetic_count,
-                    val_summary_path,
+                    eval_summary_path,
                     model_instance=model_instance,
                     run_dir=run_dir,
                 )
@@ -313,4 +271,4 @@ if __name__ == "__main__":
         csv_path = Path(config["logging"]["output_dir"]) / "results.csv"
         results_logger.export_csv(csv_path)
 
-    multi_run_evaluation(resnet18_runs_dir=str(runs_dir))
+    multi_run_evaluation(resnet18_runs_dir=str(runs_dir), only_show_mean=True)

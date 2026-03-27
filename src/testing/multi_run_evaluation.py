@@ -211,7 +211,7 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False, 
         # Plot accuracy with error bars (on top)
         ax.errorbar(synthetic_counts, mean_accuracies, yerr=std_accuracies, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
-                    color='darkblue', markerfacecolor='red', 
+                    color='darkblue', markerfacecolor='blue', 
                     ecolor='gray', capthick=2, label='Mean ± Std', zorder=3)
         
         ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
@@ -319,7 +319,7 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False, 
         # Plot factor-based accuracy with error bars (on top)
         ax.errorbar(factors, mean_accuracies, yerr=std_accuracies, 
                     fmt='o-', markersize=8, capsize=5, linewidth=2, 
-                    color='darkblue', markerfacecolor='red', 
+                    color='darkblue', markerfacecolor='blue', 
                     ecolor='gray', capthick=2, label='Mean ± Std', zorder=3)
         
         ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
@@ -496,7 +496,7 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False, 
             ax.errorbar(data['synthetic_counts'], data['mean_accuracies'], 
                        yerr=data['std_accuracies'],
                        fmt='o-', markersize=8, capsize=5, linewidth=2,
-                       color=data['color'], label=f'{data["real_count"]} Real Images',
+                       color=data['color'], markerfacecolor='blue', label=f'{data["real_count"]} Real Images',
                        capthick=2)
         
         ax.set_xlabel('Number of Synthetic Images', fontsize=12, fontweight='bold')
@@ -558,7 +558,7 @@ def create_multi_run_plot(splits_data, output_dir, synthetic_real_factor=False, 
             ax.errorbar(data['factors'], data['mean_accuracies'], 
                        yerr=data['std_accuracies'],
                        fmt='o-', markersize=8, capsize=5, linewidth=2,
-                       color=data['color'], label=f'{data["real_count"]} Real Images',
+                       color=data['color'], markerfacecolor='blue', label=f'{data["real_count"]} Real Images',
                        capthick=2)
         
         ax.set_xlabel(factor_label, fontsize=12, fontweight='bold')
