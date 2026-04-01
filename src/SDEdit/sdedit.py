@@ -381,14 +381,17 @@ def generate_images(
         print(f"Created output directory at: {Path(output_dir).resolve()}")
     print("Embeds",pipeline.unet.config.num_class_embeds)
     if pipeline.unet.config.num_class_embeds is None:
-        class_labels = None
+        unconditional = True
+        class_labels = 1
     else:
+        unconditional = False
         class_labels = pipeline.unet.config.num_class_embeds
+    
 
     for class_label in range(class_labels):
         print(f"Generating images for class {class_label}...")
 
-        if class_labels >= 1:
+        if not unconditional:
             output_dir_class = os.path.join(output_dir, f"class_{class_label}")
         else:
             output_dir_class = output_dir
@@ -418,7 +421,7 @@ def generate_images(
                     save_images_dir=output_dir_class,
             )
 
-            if class_labels >= 1:
+            if not unconditional:
                 call_kwargs["class_labels"] = torch.tensor([class_label] * batch_size).to("cuda")
             print(f"Calling pipeline with kwargs: {call_kwargs}")
             images = pipeline(**call_kwargs).images
@@ -440,7 +443,7 @@ def generate_images(
                 save_images_dir=output_dir_class,
             )
 
-            if class_labels >= 1:
+            if not unconditional:
                 call_kwargs["class_labels"] = torch.tensor([class_label] * remaining).to("cuda")
             print(f"Calling pipeline with kwargs: {call_kwargs}")
 
