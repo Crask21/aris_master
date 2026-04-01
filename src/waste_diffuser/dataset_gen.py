@@ -2,8 +2,12 @@
 import argparse
 import torch
 from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
+from src.waste_diffuser.pipeline import Pipeline
 import sys
+import json
 import os
+from PIL import Image
+from datetime import datetime
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate images using diffusion models")
     parser.add_argument(
@@ -47,14 +51,34 @@ def parse_args():
         default=1,
         help="Number of images to generate for each class"
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the model config file (used to extract class names if model is conditional)"
+    )
     return parser.parse_args()
 
 class Dataset_gen:
     #TODO: import the .config file and extract the class names for later use
     def __init__(self):
         self.args = parse_args()
-        
-        pipeline = DDIMPipeline.from_pretrained(self.args.model_dir)
+        # ISO-style timestamp for this run (safe for filenames)
+        self.run_timestamp = datetime.utcnow().isoformat(timespec='milliseconds').replace(':','-')
+        self.config = None
+        if self.args.config is not None:
+            with open(self.args.config, "r") as f:
+                raw_config = json.load(f)
+                self.config = raw_config["generate"]
+            self.args.image_num = self.config["num_images_per_class"]
+            self.args.batch_size = self.config["batch_size"]
+            self.args.model_dir = self.config["model_dir"]
+            self.args.output_dir = self.config["output_dir"]
+            self.classes = self.config["classes"]
+            if self.config["method"] == "unconditional":
+                assert len(self.classes) == 1, "For unconditional generation, there should be only one class specified in the config."
+                self.args.output_dir = os.path.join(self.args.output_dir, self.classes[0])
+        pipeline = Pipeline.from_pretrained(self.args.model_dir)
         self.pipeline = pipeline.to("cuda")
         self.pipeline.unet.eval()
         
@@ -62,7 +86,7 @@ class Dataset_gen:
         os.makedirs(self.args.output_dir, exist_ok=True)
         
         print(self.pipeline.unet.config)
-        
+        print("number of class embeds:", self.pipeline.unet.config.num_class_embeds)
         if self.pipeline.unet.config.num_class_embeds is None:
             print("Model is unconditional. Generating images without class labels.")
             self.generate_images_unconditional()
@@ -86,7 +110,8 @@ class Dataset_gen:
                 image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.batch_size).images
                 # Save images to output directory
                 for j, img in enumerate(image):
-                    img.save(f"{self.args.output_dir}/{i*self.args.batch_size + j:04d}.png")
+                        # Save image with ISO timestamp prefix
+                        img.save(f"{self.args.output_dir}/{self.run_timestamp}_{i*self.args.batch_size + j:04d}.png")
             
             # Handle remaining images if image_num is not divisible by batch_size
             remaining = n_images_to_generate % self.args.batch_size
@@ -94,13 +119,16 @@ class Dataset_gen:
                 print(f"Generating remaining {remaining} images...")
                 image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=remaining).images
                 for j, img in enumerate(image):
-                    img.save(f"{self.args.output_dir}/{(self.args.image_num - remaining) + j:04d}.png")
+                    img.save(f"{self.args.output_dir}/{self.run_timestamp}_{(self.args.image_num - remaining) + j:04d}.png")
     
     def generate_images(self):
         for class_label in range(self.pipeline.unet.config.num_class_embeds):
             print(f"Generating images for class {class_label}...")
             #Check amount of images already in output directory
-            output_dir_class = os.path.join(self.args.output_dir, f"class_{class_label}")
+            if self.config is not None:
+                output_dir_class = os.path.join(self.args.output_dir, self.classes[class_label],"images")
+            else:
+                output_dir_class = os.path.join(self.args.output_dir, f"class_{class_label}", "images")
             os.makedirs(output_dir_class, exist_ok=True)
             existing_images = len([f for f in os.listdir(output_dir_class) if f.endswith(".png")])
             print(f"Found {existing_images} existing images in directory {output_dir_class}.")
@@ -115,7 +143,13 @@ class Dataset_gen:
                     image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.batch_size, class_labels=torch.tensor([class_label]*self.args.batch_size).to("cuda")).images
                     # Save images to output directory
                     for j, img in enumerate(image):
-                        img.save(f"{output_dir_class}/{i*self.args.batch_size + j:04d}.png")
+                        # Image is a tensor, convert to PIL image before saving
+                        image_png = (img / 2 + 0.5).clamp(0, 1).cpu().permute(1, 2, 0).numpy()
+                        image_png = (image_png * 255).round().astype("uint8")
+                        image_png = Image.fromarray(image_png)
+                        # Save image with ISO timestamp prefix
+                        image_png.save(f"{output_dir_class}/{self.run_timestamp}_{i*self.args.batch_size + j:04d}.png")
+                        #img.save(f"{output_dir_class}/{i*self.args.batch_size + j:04d}.png")
                 
                 # Handle remaining images if image_num is not divisible by batch_size
                 remaining = n_images_to_generate % self.args.batch_size
@@ -123,7 +157,11 @@ class Dataset_gen:
                     print(f"Generating remaining {remaining} images...")
                     image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=remaining, class_labels=torch.tensor([class_label]*remaining).to("cuda")).images
                     for j, img in enumerate(image):
-                        img.save(f"{output_dir_class}/{(self.args.image_num - remaining) + j:04d}.png")
+                        image_png = (img / 2 + 0.5).clamp(0, 1).cpu().permute(1, 2, 0).numpy()
+                        image_png = (image_png * 255).round().astype("uint8")
+                        image_png = Image.fromarray(image_png)
+                        # Save image with ISO timestamp prefix
+                        image_png.save(f"{output_dir_class}/{self.run_timestamp}_{(self.args.image_num - remaining) + j:04d}.png")
                 
 
 if __name__ == "__main__":
