@@ -3,6 +3,7 @@ import argparse
 import torch
 from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
 from src.waste_diffuser.pipeline import Pipeline
+from src.SDEdit.sdedit import SDEdit_gen_dataset
 import sys
 import json
 import os
@@ -70,14 +71,46 @@ class Dataset_gen:
             with open(self.args.config, "r") as f:
                 raw_config = json.load(f)
                 self.config = raw_config["generate"]
-            self.args.image_num = self.config["num_images_per_class"]
+            self.args.image_num = self.config.get("num_images_per_class", 1)
             self.args.batch_size = self.config["batch_size"]
             self.args.model_dir = self.config["model_dir"]
             self.args.output_dir = self.config["output_dir"]
+            self.args.method = self.config["method"]
             self.classes = self.config["classes"]
-            if self.config["method"] == "unconditional":
+            if self.args.method == "unconditional":
                 assert len(self.classes) == 1, "For unconditional generation, there should be only one class specified in the config."
                 self.args.output_dir = os.path.join(self.args.output_dir, self.classes[0])
+        
+        if self.args.method == "unconditional":
+            print("Running unconditional generation...")
+            self.classic_diffusion()
+        elif self.args.method == "conditional":
+            print("Running conditional generation...")
+            self.classic_diffusion()
+        elif self.args.method.lower() == "sdedit":
+            print("Running SDEdit generation...")
+            _class = self.config.get("class_label", 0)
+            if type(_class) == str:
+                # Index of _class on the classes list in the config file
+                class_label = self.classes.index(_class)
+                print(f"Using class label {class_label} for class {_class}")
+            else:
+                class_label = _class
+                print(f"Using class label {class_label} from config file")
+            SDEdit_gen_dataset(
+                model_dir=self.args.model_dir,
+                output_dir=self.args.output_dir,
+                guide_image_folder=self.config["guide_image_folder"],
+                synth_images_per_guide_image=self.config["synth_images_per_guide_image"],
+                batch_size=self.args.batch_size,
+                num_inference_steps=self.args.num_inference_steps,
+                strength=self.config.get("strength", 0.9),
+                class_label=class_label,
+            )
+
+
+
+    def classic_diffusion(self):
         pipeline = Pipeline.from_pretrained(self.args.model_dir)
         self.pipeline = pipeline.to("cuda")
         self.pipeline.unet.eval()
@@ -92,7 +125,7 @@ class Dataset_gen:
             self.generate_images_unconditional()
         else:
             print(f"Model is conditional with {self.pipeline.unet.config.num_class_embeds} class embeds. Generating images for each class.")
-            self.generate_images()
+            self.generate_images_conditional()
             
                 
     def generate_images_unconditional(self):
@@ -121,7 +154,7 @@ class Dataset_gen:
                 for j, img in enumerate(image):
                     img.save(f"{self.args.output_dir}/{self.run_timestamp}_{(self.args.image_num - remaining) + j:04d}.png")
     
-    def generate_images(self):
+    def generate_images_conditional(self):
         for class_label in range(self.pipeline.unet.config.num_class_embeds):
             print(f"Generating images for class {class_label}...")
             #Check amount of images already in output directory

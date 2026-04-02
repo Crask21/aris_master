@@ -87,9 +87,9 @@ class ResNet18Test:
         self.lowest_val_loss = float("inf")
         self.log_train_loss, self.log_val_loss, self.log_train_acc, self.log_val_acc = [], [], [], []
         
-        self.checkpointing_steps = self.config["logging"]["checkpointing_steps"]
-        resume_from_checkpoint = self.config["logging"]["resume_from_checkpoint"]
-        checkpoint_dir = self.config["logging"]["checkpoint_dir"]
+        self.checkpointing_steps = self.config["logging"].get("checkpointing_steps", 5)
+        resume_from_checkpoint = self.config["logging"].get("resume_from_checkpoint", True)
+        checkpoint_dir = self.config["logging"].get("checkpoint_dir", None)
         
         if resume_checkpoint_path is not None:
             checkpoint_dir = resume_checkpoint_path
