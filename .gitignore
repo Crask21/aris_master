@@ -1,6 +1,8 @@
 training/
 queue/
-testing/
+#testing/
+test/
+GIF/
 
 # -------------------- VS Code python .gitignore template -------------------- #
 # Byte-compiled / optimized / DLL files
