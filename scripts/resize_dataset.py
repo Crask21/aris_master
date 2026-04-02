@@ -9,8 +9,8 @@ import shutil
 from pathlib import Path
 from typing import Tuple
 
-from scripts.training_session.save_config import save_args_as_config
-from scripts.training_session.generate_data_summary import generate_data_summary
+# from scripts.training_session.save_config import save_args_as_config
+# from scripts.training_session.generate_data_summary import generate_data_summary
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -134,6 +134,9 @@ def process_dataset(input_dir: Path, output_dir: Path, width: int, height: int, 
     target_size = (width, height)
     preview_originals = []
     preview_resized = []
+    processed_count = 0
+    skipped_count = 0
+    error_count = 0
     
     # Process each image
     for img_path in tqdm(image_paths, desc="Resizing images", unit="image"):
@@ -143,17 +146,24 @@ def process_dataset(input_dir: Path, output_dir: Path, width: int, height: int, 
         
         # Create output directory if it doesn't exist
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Skip if output image already exists
+        if output_path.exists():
+            skipped_count += 1
+            continue
         
         # Resize and save image
         try:
             resized_img = resize_image(img_path, target_size)
             resized_img.save(output_path, quality=95)
+            processed_count += 1
             
             # Collect samples for preview
             if preview and len(preview_originals) < 4:
                 preview_originals.append(img_path)
                 preview_resized.append(resized_img)
         except Exception as e:
+            error_count += 1
             tqdm.write(f"Error processing {rel_path}: {e}")
     
     # Copy non-image files (like annotations) to preserve folder structure
@@ -168,6 +178,10 @@ def process_dataset(input_dir: Path, output_dir: Path, width: int, height: int, 
     
     print(f"\nDataset processing complete!")
     print(f"Output saved to: {output_dir}")
+    print(f"Images resized: {processed_count}")
+    print(f"Images skipped (already existed): {skipped_count}")
+    if error_count > 0:
+        print(f"Images failed: {error_count}")
     
     # Show preview
     if preview and preview_originals:
@@ -194,14 +208,20 @@ def main():
     parser.add_argument(
         '--width',
         type=int,
-        required=True,
+        required=False,
         help='Target width for resized images'
     )
     parser.add_argument(
         '--height',
         type=int,
-        required=True,
+        required=False,
         help='Target height for resized images'
+    )
+    parser.add_argument(
+        '--size',
+        type=int,
+        required=False,
+        help='Target size for resized images'
     )
     parser.add_argument(
         '--preview',
@@ -217,9 +237,11 @@ def main():
     )
     
     args = parser.parse_args()
-    save_args_as_config(args, output_dir=args.out)
-    generate_data_summary(args.input, args.out)
-    
+    # save_args_as_config(args, output_dir=args.out)
+    # generate_data_summary(args.input, args.out)
+    if args.size:
+        args.width = args.size
+        args.height = args.size
     process_dataset(
         input_dir=args.input,
         output_dir=args.out,

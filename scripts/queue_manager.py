@@ -273,13 +273,13 @@ def re_run_recent_config():
 
 def run_queue():
     """Discover and execute all .json config files in the queue directory."""
-    config_files = sorted(QUEUE_DIR.glob("*.json"))
+    config_files = sorted(QUEUE_DIR.rglob("*.json"))
     
 
     
     if not config_files:
         if re_run_recent_config():
-            config_files = sorted(QUEUE_DIR.glob("*.json"))
+            config_files = sorted(QUEUE_DIR.rglob("*.json"))
         else:
             return
     completed_count = 0
@@ -303,7 +303,7 @@ def run_queue():
             except Exception:
                 pass
             failed_count += 1
-        config_files = sorted(QUEUE_DIR.glob("*.json"))
+        config_files = sorted(QUEUE_DIR.rglob("*.json"))
 
     print()
     print_header("All configs processed.")

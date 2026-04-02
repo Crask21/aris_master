@@ -377,12 +377,15 @@ def format_data_summary(structure_type: str, data: Dict, dataset_path=None, conf
     lines.append("## Configuration Summary")
     lines.append("")
     
+    
     # Handle dataset paths
     if class_dict:
         # Extract unique data directories from class_dict
         data_dirs = set()
         for class_config in class_dict.values():
-            data_dirs.add(str(Path(class_config['data_dir']).resolve()))
+            class_data_dir = class_config.get('data_dir', None)
+            if class_data_dir is not None:
+                data_dirs.add(str(Path(class_config['data_dir']).resolve()))
         
         if len(data_dirs) == 1:
             lines.append(f"**Dataset Path:** `{list(data_dirs)[0]}`")
@@ -802,8 +805,12 @@ def generate_data_summary_from_config(
     data_summary = format_data_summary(structure_type, data, dataset_path=None, config=cfg, class_dict=class_dict)
     
     # Update or create notes.md (use first data_dir for legacy dataset_path parameter)
-    first_data_dir = Path(list(class_dict.values())[0]['data_dir']) if 'data_dir' in list(class_dict.values())[0] else Path(output_path).parent
-    update_or_create_notes(output_path, data_summary, first_data_dir, comment, verbose)
+    class_data_dirs = [class_config['data_dir'] for class_config in class_dict.values() if 'data_dir' in class_config]
+    for c_dir in class_data_dirs:
+        if c_dir is not None:
+            first_data_dir = Path(list(class_dict.values())[0]['data_dir']) if 'data_dir' in list(class_dict.values())[0] else Path(output_path).parent
+            update_or_create_notes(output_path, data_summary, first_data_dir, comment, verbose)
+            break
     
     if verbose:
         print(f"✓ Configuration summary generated successfully: {output_path}")

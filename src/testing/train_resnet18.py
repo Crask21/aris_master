@@ -87,9 +87,9 @@ class ResNet18Test:
         self.lowest_val_loss = float("inf")
         self.log_train_loss, self.log_val_loss, self.log_train_acc, self.log_val_acc = [], [], [], []
         
-        self.checkpointing_steps = self.config["logging"]["checkpointing_steps"]
-        resume_from_checkpoint = self.config["logging"]["resume_from_checkpoint"]
-        checkpoint_dir = self.config["logging"]["checkpoint_dir"]
+        self.checkpointing_steps = self.config["logging"].get("checkpointing_steps", 5)
+        resume_from_checkpoint = self.config["logging"].get("resume_from_checkpoint", True)
+        checkpoint_dir = self.config["logging"].get("checkpoint_dir", None)
         
         if resume_checkpoint_path is not None:
             checkpoint_dir = resume_checkpoint_path
@@ -123,25 +123,71 @@ class ResNet18Test:
         start_time = time.time()
         val_acc = 0
         val_loss = float("inf")
+        log_timing = False
+        # Print total number of parameters in the model
+        total_params = sum(p.numel() for p in self.model.parameters())
+        logger.info(f"Total parameters in ResNet18: {total_params}")
+        # Print total number of trainable parameters in the model
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        logger.info(f"Trainable parameters in ResNet18: {trainable_params}")
+
         for epoch in tqdm(range(self.start_epoch, self.num_epochs)):
             self.model.train()
             running_loss = 0.0
             train_correct, train_total = 0, 0
+
+            end_of_step_time = time.perf_counter()
+            time_spent_loading_data = 0.0
+            time_spent_h2d_transfer = 0.0
+            time_using_gpu = 0.0
+            transfer_event_pairs = []
+            compute_event_pairs = []
+            
             for batch_idx, batch in tqdm(enumerate(self.train_loader)):
+                time_spent_loading_data += time.perf_counter() - end_of_step_time
+
                 labels = batch["class"]
                 inputs = batch["image"]
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                if log_timing:
+                    transfer_start_event = torch.cuda.Event(enable_timing=True)
+                    transfer_end_event = torch.cuda.Event(enable_timing=True)
+                    transfer_start_event.record()
+                    inputs = inputs.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
+                    transfer_end_event.record()
+                    transfer_event_pairs.append((transfer_start_event, transfer_end_event))
+                    compute_start_event = torch.cuda.Event(enable_timing=True)
+                    compute_end_event = torch.cuda.Event(enable_timing=True)
+                    compute_start_event.record()
+                else:
+                    inputs = inputs.to(self.device)
+                    labels = labels.to(self.device)
+                    time_gpu_start = time.perf_counter()
+
                 self.optimizer.zero_grad()
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
                 loss.backward()
                 self.optimizer.step()
-                
+                if log_timing:
+                    compute_end_event.record()
+                    compute_event_pairs.append((compute_start_event, compute_end_event))
                 # Track training accuracy
+                running_loss += loss.item() * inputs.size(0)
                 _, predicted = outputs.max(1)
                 train_total += labels.size(0)
                 train_correct += predicted.eq(labels).sum().item()
-                
+
+                end_of_step_time = time.perf_counter()
+
+            if log_timing:
+                torch.cuda.synchronize(self.device)
+                time_spent_h2d_transfer = sum(start.elapsed_time(end) for start, end in transfer_event_pairs) / 1000.0
+                time_using_gpu = sum(start.elapsed_time(end) for start, end in compute_event_pairs) / 1000.0
+
+                print(f"[DEBUG] Epoch {epoch+1} - Time spent loading data: {time_spent_loading_data:.2f} seconds")
+                print(f"[DEBUG] Epoch {epoch+1} - Time spent host->device transfer: {time_spent_h2d_transfer:.2f} seconds")
+                print(f"[DEBUG] Epoch {epoch+1} - Time spent using GPU: {time_using_gpu:.2f} seconds")
         
             train_loss = running_loss / len(self.train_loader.dataset)
             train_acc = 100. * train_correct / train_total

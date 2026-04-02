@@ -39,11 +39,17 @@ class ResNetDataloader(dataloaderInterface):
         print(f"[INFO] Data augmentations enabled for synthetic images: {self.data_augmentations_synthetic}")
         self.real_image_count = data_config["real_image_count"]
         self.synthetic_image_count = data_config["synthetic_image_count"]
+        self.prefetch_factor = config.get("hyperparameters", {}).get("dataloader_prefetch_factor", 2)
         
         if real_image_count is not None:
             self.real_image_count = real_image_count
         if synthetic_image_count is not None:
             self.synthetic_image_count = synthetic_image_count
+
+        if not isinstance(self.prefetch_factor, int) or self.prefetch_factor < 1:
+            print(f"[WARNING] Invalid dataloader_prefetch_factor={self.prefetch_factor}. Falling back to 2.")
+            self.prefetch_factor = 2
+
         
         
         # [Assertion] Assert that either real_image_count or synthetic_image_count is specified in the config file
@@ -136,15 +142,27 @@ class ResNetDataloader(dataloaderInterface):
         return data_dict
     
 # --------------------------- Define augmentations --------------------------- #
-    def training_augmentations(self, data_augmentations=False):
+    def training_augmentations(self, data_augmentations=False, data_type = None):
             # Preprocessing the datasets and DataLoaders creation.
-        print(f"[INFO] Setting up training augmentations. Using data augmentations: {data_augmentations}")
+        if data_type is not None:
+            if data_type == "real":
+                print(f"[INFO] Setting up real image training augmentations.")
+            elif data_type == "synth":
+                print(f"[INFO] Setting up synthetic image training augmentations.")
+            else:
+                print(f"[INFO] Setting up training augmentations.")
+        else:
+                print(f"[INFO] Setting up training augmentations. (No data_type given)")
+
+
         if data_augmentations:
 
+            print("[INFO] Classic data augmentations is used")
             augmentations = build_image_augmentations(
                 config=self.config
             )
         else:
+            print("[INFO] No data augmentations is used")
 
             augmentations = self.base_augmentations() 
         print(f"[INFO] Training augmentations set: {augmentations}")
@@ -155,8 +173,8 @@ class ResNetDataloader(dataloaderInterface):
         """Minimal transform for synthetic data: resize + center crop + normalize.
         No random augmentations (flips, random crops, color jitter, etc.)."""
         self.base_aug = transforms.Compose([
-            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.Lambda(lambda x: x),
+            #transforms.CenterCrop(1200) if self.center_crop else transforms.Lambda(lambda x: x),
+            #transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
             transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
             transforms.Normalize([0.5], [0.5]),
@@ -186,6 +204,7 @@ class ResNetDataloader(dataloaderInterface):
         processed = []
         for filepath, split in zip(examples["filepath"], examples["split"]):
             # Import as image using PIL
+                # print(f"[INFO] Loading image from disk: {filepath}")
             image = Image.open(filepath).convert("RGB")
             if split == "synth":
                 # Synthetic images: only resize + center crop + normalize (no random augmentations)
@@ -226,7 +245,6 @@ class ResNetDataloader(dataloaderInterface):
         generate_data_summary_from_config(config_path=self.config_path, data_dict=data_dict) # Generate notes.md summary of the dataset based on the config file and the generated data dictionary
         # Print dataset summary
         self.print_dataset_summary(data_dict)
-        
         self.data_json_path = os.path.join(self.output_dir, "data_file.json")
         
         # Dump data files to json file
@@ -246,14 +264,32 @@ class ResNetDataloader(dataloaderInterface):
         
         # --- Define augmentations --- #
         self.val_aug = self.val_augmentations()
-        self.train_aug = self.training_augmentations(data_augmentations=self.data_augmentations_real)
-        self.train_synthetic_aug = self.training_augmentations(data_augmentations=self.data_augmentations_synthetic)
-                  
+        self.train_aug = self.training_augmentations(data_augmentations=self.data_augmentations_real, data_type = "real")
+        self.train_synthetic_aug = self.training_augmentations(data_augmentations=self.data_augmentations_synthetic, data_type="synth")
+        
         train_dataset.set_transform(self.train_transform)
         val_dataset.set_transform(self.val_transform)
         
-        self.train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers, generator=torch.Generator().manual_seed(self.seed)) 
-        self.val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers,generator=torch.Generator().manual_seed(self.seed)) 
+        train_loader_kwargs = {
+            "batch_size": self.batch_size,
+            "shuffle": True,
+            "num_workers": self.num_workers,
+            "generator": torch.Generator().manual_seed(self.seed),
+            "persistent_workers": self.num_workers > 0,
+        }
+        val_loader_kwargs = {
+            "batch_size": self.batch_size,
+            "shuffle": True,
+            "num_workers": self.num_workers,
+            "generator": torch.Generator().manual_seed(self.seed),
+            "persistent_workers": self.num_workers > 0,
+        }
+        if self.num_workers > 0:
+            train_loader_kwargs["prefetch_factor"] = self.prefetch_factor
+            val_loader_kwargs["prefetch_factor"] = self.prefetch_factor
+        
+        self.train_loader = torch.utils.data.DataLoader(train_dataset, **train_loader_kwargs)
+        self.val_loader = torch.utils.data.DataLoader(val_dataset, **val_loader_kwargs)
         
         
         self.preview_dataloader(self.train_loader, show=self.preview)
