@@ -238,7 +238,7 @@ def _move_to_dir(config_path: Path, target_dir: Path, timestamp: str):
         new_name = f"{timestamp}_{config_path.name[len(existing_timestamp_match.group()):]}"
     else:
         new_name = f"{timestamp}_{config_path.name}"
-    dest = target_dir / new_name
+    dest = target_dir / config_path.name
     shutil.move(str(config_path), str(dest))
     print_info(f"Moved {ENDC}{BOLD}{config_path.name}{ENDC}{CYAN} -> {dest}")
 
