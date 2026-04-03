@@ -4,7 +4,9 @@ import torch
 from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
 from src.waste_diffuser.pipeline import Pipeline
 from src.SDEdit.sdedit import SDEdit_gen_dataset
+from src.testing.compute_fid import compute_fid
 import sys
+from pathlib import Path
 import json
 import os
 from PIL import Image
@@ -58,11 +60,18 @@ def parse_args():
         default=None,
         help="Path to the model config file (used to extract class names if model is conditional)"
     )
+    parser.add_argument(
+        "--compute_fid",
+        type=int,
+        default=0,
+        help="Number of times to compute FID. If > 1, prints mean and std.",
+    )
     return parser.parse_args()
 
 class Dataset_gen:
     #TODO: import the .config file and extract the class names for later use
     def __init__(self):
+        # ----------------------------- Intialize config ----------------------------- #
         self.args = parse_args()
         # ISO-style timestamp for this run (safe for filenames)
         self.run_timestamp = datetime.utcnow().isoformat(timespec='milliseconds').replace(':','-')
@@ -81,6 +90,7 @@ class Dataset_gen:
                 assert len(self.classes) == 1, "For unconditional generation, there should be only one class specified in the config."
                 self.args.output_dir = os.path.join(self.args.output_dir, self.classes[0])
         
+        # ------------------------------- Generate data ------------------------------ #
         if self.args.method == "unconditional":
             print("Running unconditional generation...")
             self.classic_diffusion()
@@ -107,6 +117,32 @@ class Dataset_gen:
                 strength=self.config.get("strength", 0.9),
                 class_label=class_label,
             )
+
+        if self.args.method == "conditional" and len(self.classes) == 1:
+            self.args.output_dir = os.path.join(self.args.output_dir, self.classes[0],"images")
+            print(f"Only one class specified in config, setting output directory to {self.args.output_dir} for FID computation.")
+        # -------------------------------- Compute FID ------------------------------- #
+        if self.args.compute_fid or (self.config is not None and self.config.get("compute_fid", False)):
+            
+            real_path = self.config["real_image_path"] if self.config is not None else input("Enter path to real images for FID computation: ")
+            # Look for fid_results*.json in the model directory to potentially reuse dataset hashes
+            previous_results = None
+            for filename in Path(self.args.model_dir).glob("fid_results_*.json"):
+                previous_results = filename
+                print(f"Found previous FID results JSON: {previous_results}. Will attempt to reuse dataset hashes if compatible.")
+                break
+            fid_dict = compute_fid(
+                real=real_path,
+                fake=self.args.output_dir,
+                cuda=True,
+                search_deep=True,
+                batch_size=self.args.batch_size,
+            )
+            # Save the FID results to a JSON file in the model directory
+            fid_results_path = os.path.join(self.args.model_dir, f"fid_results_{self.run_timestamp}.json")
+            with open(fid_results_path, "w") as f:
+                json.dump(fid_dict, f, indent=4)
+            print(f"FID results saved to {fid_results_path}")
 
 
 
