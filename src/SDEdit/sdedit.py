@@ -6,6 +6,8 @@ import tkinter as tk
 import torch
 from pathlib import Path
 from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
+from tqdm import tqdm
+from src.waste_diffuser.pipeline import Pipeline
 import sys
 import os
 import matplotlib.pyplot as plt
@@ -25,7 +27,7 @@ from diffusers.pipelines import ImagePipelineOutput
 #                                   Functions                                  #
 # ---------------------------------------------------------------------------- #
 # ------------------------------ SDEdit Pipeline ----------------------------- #
-class SDEdit(DDIMPipeline):
+class SDEdit(Pipeline):
     def __init__(self, unet: UNet2DModel, scheduler: DDIMScheduler):
         super().__init__(unet=unet, scheduler=scheduler)
 
@@ -175,7 +177,7 @@ class SDEdit(DDIMPipeline):
                 self._save_preview(guide_tensor, "guide_image.png", save_folder="previews")
                 self._show_preview(image, f"Noised guide at t={int(active_timesteps[0])}")
                 self._save_preview(image, f"Noised_guide_t{int(active_timesteps[0])}.png", save_folder="Noised guide")
-        print(f"Using {len(active_timesteps)} active timesteps out of {len(timesteps)} total timesteps.")
+        #print(f"Using {len(active_timesteps)} active timesteps out of {len(timesteps)} total timesteps.")
         total_steps = len(active_timesteps)
 
         for step_index, t in enumerate(self.progress_bar(active_timesteps)):
@@ -227,7 +229,7 @@ class SDEdit(DDIMPipeline):
                     self._save_preview(image, noised_name, save_folder=out_dir)
                 except Exception as e:
                     print(f"Warning: failed saving intermediate images: {e}")
-            print(f"Completed step {step_index + 1}/{total_steps} (t={int(t)})")
+            # print(f"Completed step {step_index + 1}/{total_steps} (t={int(t)})")
 
         if preview:
             self._show_preview(image, "Final output")
@@ -355,12 +357,14 @@ def generate_images(
     num_images=5,
     batch_size=16,
     num_inference_steps=50,
-    class_labels=None,
+    class_label=0,
     preview=False,
     guide_image_path=None,
     preserve_mask_path=None,
     strength=0.8,
     save_images=False,
+    verbose=False,
+    force_generate=False,
     ):
     pipeline = SDEdit.from_pretrained(model_dir)
     pipeline.to("cuda")
@@ -378,76 +382,88 @@ def generate_images(
     if not Path(output_dir).exists():
         os.makedirs(output_dir, exist_ok=True)
         print(f"Created output directory at: {Path(output_dir).resolve()}")
-
+    # print("Embeds",pipeline.unet.config.num_class_embeds)
     if pipeline.unet.config.num_class_embeds is None:
-        class_labels = 1
+        unconditional = True
     else:
-        class_labels = pipeline.unet.config.num_class_embeds
-
-    for class_label in range(class_labels):
+        unconditional = False
+    
+    if verbose:
         print(f"Generating images for class {class_label}...")
 
-        if class_labels > 1:
-            output_dir_class = os.path.join(output_dir, f"class_{class_label}")
-        else:
-            output_dir_class = output_dir
+    if not unconditional:
+        output_dir_class = output_dir
+        #os.path.join(output_dir, f"class_{class_label}")
+    else:
+        output_dir_class = output_dir
 
-        os.makedirs(output_dir_class, exist_ok=True)
-        existing_images = len([f for f in os.listdir(output_dir_class) if f.endswith(".png")])
+    os.makedirs(output_dir_class, exist_ok=True)
+    existing_images = len([f for f in os.listdir(output_dir_class) if f.endswith(".png")])
+    if verbose:
         print(f"Found {existing_images} existing images in directory {output_dir_class}.")
 
-        if existing_images >= num_images and False:
+    if existing_images >= num_images and not force_generate:
+        if verbose:
             print(f"Already have {existing_images} images, which is >= requested {num_images}. Skipping generation.")
-            continue
+        return
+    
+    if force_generate and existing_images > 0:
+        if verbose:
+            print(f"Force generate is True, but found {existing_images} existing images. New images will be numbered starting from {existing_images}.")
+        n_images_to_generate = num_images
+    else:
+        n_images_to_generate = max(0, num_images - existing_images)
+    full_batches = n_images_to_generate // batch_size
 
-        print(f"Generating {num_images - existing_images} new images...")
-        n_images_to_generate = num_images - existing_images
-        full_batches = n_images_to_generate // batch_size
+    if verbose:
+        print(f"Generating {n_images_to_generate} new images...")
 
-        for i in range(full_batches):
+    for i in range(full_batches):
+        if verbose:
             print(f"Generating batch {i + 1}/{full_batches}...")
-            call_kwargs = dict(
-                num_inference_steps=num_inference_steps,
-                batch_size=batch_size,
-                preview=preview,
-                guide_image=guide_image_path,
-                preserve_mask=preserve_mask_path,
-                strength=strength,
-                    save_images=save_images,
-                    save_images_dir=output_dir_class,
-            )
-
-            if class_labels > 1:
-                call_kwargs["class_labels"] = torch.tensor([class_label] * batch_size).to("cuda")
-
-            images = pipeline(**call_kwargs).images
-
-            for j, img in enumerate(images):
-                img.save(f"{output_dir_class}/{i * batch_size + j:04d}.png")
-
-        remaining = n_images_to_generate % batch_size
-        if remaining > 0:
-            print(f"Generating remaining {remaining} images...")
-            call_kwargs = dict(
-                num_inference_steps=num_inference_steps,
-                batch_size=remaining,
-                preview=preview,
-                guide_image=guide_image_path,
-                preserve_mask=preserve_mask_path,
-                strength=strength,
+        call_kwargs = dict(
+            num_inference_steps=num_inference_steps,
+            batch_size=batch_size,
+            preview=preview,
+            guide_image=guide_image_path,
+            preserve_mask=preserve_mask_path,
+            strength=strength,
                 save_images=save_images,
                 save_images_dir=output_dir_class,
-            )
+        )
+        
+        if not unconditional:
+            call_kwargs["class_labels"] = torch.tensor([class_label] * batch_size).to("cuda")
+        # print(f"Calling pipeline with kwargs: {call_kwargs}")
+        images = pipeline(**call_kwargs).images
 
-            if class_labels > 1:
-                call_kwargs["class_labels"] = torch.tensor([class_label] * remaining).to("cuda")
+        for j, img in enumerate(images):
+            img.save(f"{output_dir_class}/{Path(guide_image_path).name}_{i * batch_size + j:04d}.png")
 
-            images = pipeline(**call_kwargs).images
+    remaining = n_images_to_generate % batch_size
+    if remaining > 0:
+        print(f"Generating remaining {remaining} images...")
+        call_kwargs = dict(
+            num_inference_steps=num_inference_steps,
+            batch_size=remaining,
+            preview=preview,
+            guide_image=guide_image_path,
+            preserve_mask=preserve_mask_path,
+            strength=strength,
+            save_images=save_images,
+            save_images_dir=output_dir_class,
+        )
 
-            for j, img in enumerate(images):
-                img.save(f"{output_dir_class}/{(num_images - remaining) + j:04d}.png")
+        if not unconditional:
+            call_kwargs["class_labels"] = torch.tensor([class_label] * remaining).to("cuda")
+        # print(f"Calling pipeline with kwargs: {call_kwargs}")
 
-        print(f"Finished generating images to: {Path(output_dir_class).resolve()}")
+        images = pipeline(**call_kwargs).images
+
+        for j, img in enumerate(images):
+            img.save(f"{output_dir_class}/{Path(guide_image_path).name}_{(num_images - remaining) + j:04d}.png")
+
+    print(f"Finished generating images to: {Path(output_dir_class).resolve()}")
 
 
 def _extract_number_key(path: str):
@@ -545,7 +561,49 @@ def make_gif_from_pattern(
         optimize=False,
     )
 
+def SDEdit_gen_dataset(model_dir, output_dir, guide_image_folder, synth_images_per_guide_image, batch_size = 16, num_inference_steps = 50, preview = False, strength = 0.9, save_images = False, class_label = 0, verbose = False):
+    # Print the core parameters for this dataset generation run
+    print(f"Starting SDEdit dataset generation with parameters:")
+    print(f"  Model directory: {model_dir}")
+    print(f"  Output directory: {output_dir}")
+    print(f"  Guide image folder: {guide_image_folder}")
+    print(f"  Class label: {class_label}")
+    print(f"  Synthetic images per guide image: {synth_images_per_guide_image}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Strength: {strength}")
+    img_patterns = ("*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tif", "*.tiff")
+    guide_files = []
+    for pat in img_patterns:
+        guide_files.extend(glob.glob(os.path.join(guide_image_folder, pat)))
+    guide_files = sorted(set(guide_files), key=_extract_number_key)
 
+    os.makedirs(output_dir, exist_ok=True)
+    # Number of existing .png files in the output directory (to avoid overwriting)
+    existing_images = len([f for f in os.listdir(output_dir) if f.endswith(".png")])
+    print(f"Found {existing_images} existing .png images in output directory: {output_dir}. New images will be numbered starting from {existing_images}.")
+    if not guide_files:
+        print(f"No guide images found in: {guide_image_folder}")
+    else:
+        for idx, guide_path in tqdm(enumerate(guide_files), total=len(guide_files)-existing_images):
+            print(f"[{idx+1}/{len(guide_files)}] Using guide image: {guide_path}")
+            # use a subdirectory per guide to avoid filename collisions
+                # guide_stem = Path(guide_path).stem
+                # out_dir = os.path.join(output_dir, guide_stem)
+            generate_images(
+                model_dir=model_dir,
+                output_dir=output_dir,
+                num_images=synth_images_per_guide_image,
+                batch_size=batch_size,
+                num_inference_steps=num_inference_steps,
+                preview=preview,
+                guide_image_path=guide_path,
+                preserve_mask_path=None,
+                strength=strength,
+                save_images=save_images,
+                class_label=class_label, 
+                verbose=False,
+                force_generate = True,  # always generate since we're doing per-guide generation and want synth_images_per_guide_image per guide
+            )
 
 
 def main():
@@ -560,6 +618,8 @@ def main():
     parser.add_argument("--preview", action="store_true", help="Whether to show preview images during generation")
     parser.add_argument("--save_images", action="store_true", help="Whether to save intermediate images during generation")
     parser.add_argument("--guide_image_path", type=str, default=None, help="Path to guide image for SDEdit")
+    parser.add_argument("--guide_image_folder", type=str, default=None, help="Folder with guide images for batch per-guide generation")
+    parser.add_argument("--synth_images_per_guide_image", type=int, default=None, help="Number of synthetic images to generate per guide image (when --guide_image_folder is set)")
     parser.add_argument("--strength", type=float, default=0.9, help="Strength of the edit (0.0 = no change, 1.0 = full noise)")
     # GIF options
     parser.add_argument("--make_gif", action="store_true", help="After generation, assemble step images into a GIF")
@@ -572,18 +632,32 @@ def main():
 
     args = parser.parse_args()
 
-    generate_images(
-        model_dir=args.model_dir,
-        output_dir=args.output_dir,
-        num_images=args.num_images,
-        batch_size=args.batch_size,
-        num_inference_steps=args.num_inference_steps,
-        preview=args.preview,
-        guide_image_path=args.guide_image_path,
-        preserve_mask_path=None,
-        strength=args.strength,
-        save_images=args.save_images,
-    )
+    # If a guide image folder and per-guide count are provided, generate per-guide images
+    if args.guide_image_folder is not None and args.synth_images_per_guide_image is not None:
+        SDEdit_gen_dataset(
+            model_dir=args.model_dir,
+            output_dir=args.output_dir,
+            guide_image_folder=args.guide_image_folder,
+            synth_images_per_guide_image=args.synth_images_per_guide_image,
+            batch_size=args.batch_size,
+            num_inference_steps=args.num_inference_steps,
+            preview=args.preview,
+            strength=args.strength,
+            save_images=args.save_images,
+        )
+    else:
+        generate_images(
+            model_dir=args.model_dir,
+            output_dir=args.output_dir,
+            num_images=args.num_images,
+            batch_size=args.batch_size,
+            num_inference_steps=args.num_inference_steps,
+            preview=args.preview,
+            guide_image_path=args.guide_image_path,
+            preserve_mask_path=None,
+            strength=args.strength,
+            save_images=args.save_images,
+        )
     # Optional GIF generation
     if getattr(args, 'make_gif', False):
         # default patterns in the output directory
