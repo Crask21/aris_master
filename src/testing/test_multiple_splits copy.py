@@ -245,11 +245,13 @@ if __name__ == "__main__":
                 )
 
                 # ---- Log dependent-variable metrics to results.json ----
-                eval_summary_path = (Path(run_dir) / "evaluation"
-                                     / "evaluation_summary_val.json")
+                eval_dir = Path(run_dir) / "evaluation"
+                eval_summary_path = eval_dir / "evaluation_summary_val.json"
+                test_summary_path = eval_dir / "evaluation_summary_test.json"
                 results_logger.log_run(
                     run_number, real_count, synthetic_count,
                     eval_summary_path,
+                    test_summary_path=test_summary_path,
                     model_instance=model_instance,
                     run_dir=run_dir,
                 )

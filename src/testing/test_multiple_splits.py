@@ -238,12 +238,20 @@ if __name__ == "__main__":
                     synthetic_image_count=synthetic_count,
                     preview=args.verbose
                 )
-                model = ResNet18Test(
-                    config_path,
-                    resnet_dataloader=dataloader,
-                    output_dir=run_dir,
-                    resume_checkpoint_path=task["resume_checkpoint"]
-                )
+                try:
+                    model = ResNet18Test(
+                        config_path,
+                        resnet_dataloader=dataloader,
+                        output_dir=run_dir,
+                        resume_checkpoint_path=task["resume_checkpoint"]
+                    )
+                except Exception as e:
+                    logger.error(f"Error initializing model for training: {e}")
+                    model = ResNet18Test(
+                        config_path,
+                        resnet_dataloader=dataloader,
+                        output_dir=run_dir
+                    )
                 model.train()
                 model_instance = model
                 # After training completes the run also needs evaluation,
@@ -292,6 +300,7 @@ if __name__ == "__main__":
                 results_logger.log_run(
                     run_number, real_count, synthetic_count,
                     val_summary_path,
+                    test_summary_path=test_summary_path,
                     model_instance=model_instance,
                     run_dir=run_dir,
                 )

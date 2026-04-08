@@ -239,8 +239,9 @@ class ResNetDataloader(dataloaderInterface):
             real_train_split = self.generate_data_split(split="train", image_count=self.real_image_count)
         synthetic_train_split = self.generate_data_split(split="synth", image_count=self.synthetic_image_count)
         val_split = self.generate_data_split(split="val")
+        test_split = self.generate_data_split(split="test")
         
-        data_dict = real_train_split + val_split + synthetic_train_split
+        data_dict = real_train_split + val_split + synthetic_train_split + test_split
 
         generate_data_summary_from_config(config_path=self.config_path, data_dict=data_dict) # Generate notes.md summary of the dataset based on the config file and the generated data dictionary
         # Print dataset summary
@@ -257,6 +258,7 @@ class ResNetDataloader(dataloaderInterface):
         # Filter dataset into train and val splits
         train_dataset = dataset["train"].filter(lambda x: x["split"] == "train" or x["split"] == "synth")
         val_dataset = dataset["train"].filter(lambda x: x["split"] == "val")
+        test_dataset = dataset["train"].filter(lambda x: x["split"] == "test")
         
         print(f"[INFO] Dataset loaded from {self.config_path} with {len(train_dataset)} training samples and {len(val_dataset)} validation samples.")
 
@@ -269,6 +271,8 @@ class ResNetDataloader(dataloaderInterface):
         
         train_dataset.set_transform(self.train_transform)
         val_dataset.set_transform(self.val_transform)
+        test_dataset.set_transform(self.val_transform)
+
         
         train_loader_kwargs = {
             "batch_size": self.batch_size,
@@ -290,7 +294,7 @@ class ResNetDataloader(dataloaderInterface):
         
         self.train_loader = torch.utils.data.DataLoader(train_dataset, **train_loader_kwargs)
         self.val_loader = torch.utils.data.DataLoader(val_dataset, **val_loader_kwargs)
-        
+        self.test_loader = torch.utils.data.DataLoader(test_dataset, **val_loader_kwargs)
         
         self.preview_dataloader(self.train_loader, show=self.preview)
             

@@ -19,7 +19,8 @@ class ResultsLogger:
     """
 
     _METRIC_MAP = {
-        "val_accuracy": "accuracy",
+        # Legacy, unprefixed metric names map to values in val summary.
+        "accuracy": "accuracy",
         "f1_score": "f1_score",
         "precision": "precision",
         "recall": "recall",
@@ -201,14 +202,25 @@ class ResultsLogger:
     #  Metric extraction                                                  #
     # ------------------------------------------------------------------ #
 
-    def extract_run_metrics(self, eval_summary_path, model_instance=None,
-                            run_dir=None):
-        """Read dependent-variable metrics from the evaluation summary (and
-        optionally from the training model / checkpoint for val_loss)."""
-        eval_summary = {}
-        if Path(eval_summary_path).exists():
-            with open(eval_summary_path, "r") as f:
-                eval_summary = json.load(f)
+    def extract_run_metrics(self, val_summary_path, test_summary_path=None,
+                            model_instance=None, run_dir=None):
+        """Read dependent-variable metrics from val/test evaluation summaries.
+
+        Metric routing is config-driven:
+            - val_*  -> validation summary
+            - test_* -> test summary
+            - unprefixed metrics -> validation summary (legacy behavior)
+        """
+        val_summary = {}
+        test_summary = {}
+
+        if val_summary_path and Path(val_summary_path).exists():
+            with open(val_summary_path, "r") as f:
+                val_summary = json.load(f)
+
+        if test_summary_path and Path(test_summary_path).exists():
+            with open(test_summary_path, "r") as f:
+                test_summary = json.load(f)
 
         run_metrics = {}
         for dep_var in self.dependent_variables:
@@ -228,22 +240,44 @@ class ResultsLogger:
                         if val_losses:
                             run_metrics[dep_var] = round(
                                 float(min(val_losses)), 6)
+            elif dep_var.startswith("val_"):
+                key = dep_var[len("val_"):]
+                value = val_summary.get(key)
+                if value is None and dep_var in val_summary:
+                    value = val_summary[dep_var]
+                if value is None:
+                    logger.warning(f"[WARNING] Metric '{dep_var}' was requested "
+                                  f"but not found in val summary")
+                    continue
+                run_metrics[dep_var] = round(float(value), 6)
+
+            elif dep_var.startswith("test_"):
+                key = dep_var[len("test_"):]
+                value = test_summary.get(key)
+                if value is None and dep_var in test_summary:
+                    value = test_summary[dep_var]
+                if value is None:
+                    logger.warning(f"[WARNING] Metric '{dep_var}' was requested "
+                                  f"but not found in test summary")
+                    continue
+                run_metrics[dep_var] = round(float(value), 6)
+
             elif dep_var in self._METRIC_MAP:
                 key = self._METRIC_MAP[dep_var]
-                if key in eval_summary:
+                if key in val_summary:
                     run_metrics[dep_var] = round(
-                        float(eval_summary[key]), 6)
+                        float(val_summary[key]), 6)
             else:
-                if dep_var in eval_summary:
+                if dep_var in val_summary:
                     try:
                         run_metrics[dep_var] = round(
-                            float(eval_summary[dep_var]), 6)
+                            float(val_summary[dep_var]), 6)
                     except (TypeError, ValueError):
                         logger.warning(f"[WARNING] Could not convert '{dep_var}' "
                               f"value to float")
                 else:
                     logger.warning(f"[WARNING] Dependent variable '{dep_var}' "
-                          f"not found in evaluation summary")
+                          f"not found in val summary")
         return run_metrics
 
     # ------------------------------------------------------------------ #
@@ -251,10 +285,15 @@ class ResultsLogger:
     # ------------------------------------------------------------------ #
 
     def log_run(self, run_number, real_count, synthetic_count,
-                eval_summary_path, model_instance=None, run_dir=None):
+                val_summary_path, test_summary_path=None,
+                model_instance=None, run_dir=None):
         """Extract metrics for a completed run and append them to results."""
         run_metrics = self.extract_run_metrics(
-            eval_summary_path, model_instance, run_dir)
+            val_summary_path,
+            test_summary_path,
+            model_instance,
+            run_dir,
+        )
         run_metrics["run_id"] = f"run{run_number}"
 
         ind_value = self.get_independent_variable_value(
