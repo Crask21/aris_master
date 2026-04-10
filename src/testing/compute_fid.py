@@ -1,5 +1,6 @@
 from pathlib import Path
 from torch_fidelity import calculate_metrics
+from tqdm import tqdm
 import argparse
 from statistics import mean, stdev
 from torch import manual_seed

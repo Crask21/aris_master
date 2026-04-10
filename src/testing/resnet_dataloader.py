@@ -119,7 +119,7 @@ class ResNetDataloader(dataloaderInterface):
                 sub_category_path = os.path.join(data_dir, sub_category)
                 for root, dirs, files in os.walk(sub_category_path):
                     for file in files:
-                        if file.endswith(".png"):
+                        if file.endswith(".png") or file.endswith(".JPEG") or file.endswith(".jpg") or file.endswith(".jpeg"):
                             
                             image_file = os.path.join(root, file)
                             sample = {"filepath": image_file, "class": category, "split": split}
@@ -239,7 +239,18 @@ class ResNetDataloader(dataloaderInterface):
             real_train_split = self.generate_data_split(split="train", image_count=self.real_image_count)
         synthetic_train_split = self.generate_data_split(split="synth", image_count=self.synthetic_image_count)
         val_split = self.generate_data_split(split="val")
-        test_split = self.generate_data_split(split="test")
+        metrics = self.config["evaluation"].get("metrics", [])
+        # Check if test is within any of the metric entries
+        test_split = []
+        use_test_split = False
+        print(f"[INFO] Evaluation metrics specified in config: {metrics}")
+        for metric in metrics:
+            if "test" in metric:
+                print(f"[INFO] Test split will be generated because 'test' is found in the evaluation metrics: {metrics}")
+                use_test_split = True
+                break
+        if use_test_split:
+            test_split = self.generate_data_split(split="test")
         
         data_dict = real_train_split + val_split + synthetic_train_split + test_split
 
@@ -258,7 +269,8 @@ class ResNetDataloader(dataloaderInterface):
         # Filter dataset into train and val splits
         train_dataset = dataset["train"].filter(lambda x: x["split"] == "train" or x["split"] == "synth")
         val_dataset = dataset["train"].filter(lambda x: x["split"] == "val")
-        test_dataset = dataset["train"].filter(lambda x: x["split"] == "test")
+        if use_test_split:
+            test_dataset = dataset["train"].filter(lambda x: x["split"] == "test")
         
         print(f"[INFO] Dataset loaded from {self.config_path} with {len(train_dataset)} training samples and {len(val_dataset)} validation samples.")
 
@@ -271,7 +283,8 @@ class ResNetDataloader(dataloaderInterface):
         
         train_dataset.set_transform(self.train_transform)
         val_dataset.set_transform(self.val_transform)
-        test_dataset.set_transform(self.val_transform)
+        if use_test_split:
+            test_dataset.set_transform(self.val_transform)
 
         
         train_loader_kwargs = {
@@ -294,7 +307,7 @@ class ResNetDataloader(dataloaderInterface):
         
         self.train_loader = torch.utils.data.DataLoader(train_dataset, **train_loader_kwargs)
         self.val_loader = torch.utils.data.DataLoader(val_dataset, **val_loader_kwargs)
-        self.test_loader = torch.utils.data.DataLoader(test_dataset, **val_loader_kwargs)
+        self.test_loader = torch.utils.data.DataLoader(test_dataset, **val_loader_kwargs) if use_test_split else None
         
         self.preview_dataloader(self.train_loader, show=self.preview)
             

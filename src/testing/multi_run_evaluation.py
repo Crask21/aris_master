@@ -4,6 +4,7 @@ import json
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from pathlib import Path
 import os
 # Import parser args
@@ -13,6 +14,113 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.utils.add_note import add_note
 import logging
 logger = logging.getLogger(__name__)
+
+
+def _extract_class_names_from_report(classification_report):
+    """Extract class labels from sklearn classification report dict."""
+    if not isinstance(classification_report, dict):
+        return []
+
+    excluded = {"accuracy", "macro avg", "weighted avg", "micro avg", "samples avg"}
+    class_names = []
+    for key, value in classification_report.items():
+        if key in excluded:
+            continue
+        if isinstance(value, dict) and "support" in value:
+            class_names.append(str(key))
+    return class_names
+
+
+def _extract_class_supports(classification_report, class_names):
+    """Return per-class supports in class_names order."""
+    if not isinstance(classification_report, dict) or not class_names:
+        return None
+
+    supports = []
+    for class_name in class_names:
+        class_metrics = classification_report.get(class_name)
+        if not isinstance(class_metrics, dict) or "support" not in class_metrics:
+            return None
+        supports.append(float(class_metrics["support"]))
+    return np.asarray(supports, dtype=float)
+
+
+def _load_confusion_matrices(run_dir, evaluation_split, eval_summary):
+    """
+    Load confusion matrices for one run.
+
+    Returns:
+        cm_counts: np.ndarray or None
+        cm_normalized: np.ndarray or None
+        class_names: list[str]
+    """
+    eval_dir = run_dir / "evaluation"
+    cm_counts_path = eval_dir / f"confusion_matrix_{evaluation_split}.npy"
+    cm_normalized_path = eval_dir / f"confusion_matrix_{evaluation_split}_normalized.npy"
+
+    cm_counts = None
+    cm_normalized = None
+
+    if cm_counts_path.exists():
+        cm_counts = np.load(cm_counts_path).astype(float)
+
+    if cm_normalized_path.exists():
+        cm_normalized = np.load(cm_normalized_path).astype(float)
+
+    class_names = _extract_class_names_from_report(eval_summary.get("classification_report", {}))
+
+    # Recover missing normalized matrix from counts if needed.
+    if cm_normalized is None and cm_counts is not None:
+        row_sums = cm_counts.sum(axis=1, keepdims=True)
+        cm_normalized = np.divide(
+            cm_counts,
+            row_sums,
+            out=np.zeros_like(cm_counts, dtype=float),
+            where=row_sums != 0
+        )
+
+    # Recover missing counts matrix from normalized matrix and per-class supports.
+    if cm_counts is None and cm_normalized is not None:
+        supports = _extract_class_supports(eval_summary.get("classification_report", {}), class_names)
+        if supports is not None and cm_normalized.shape[0] == len(supports):
+            cm_counts = cm_normalized * supports[:, np.newaxis]
+
+    return cm_counts, cm_normalized, class_names
+
+
+def _plot_mean_confusion_matrix(mean_cm_counts, mean_cm_normalized, class_names, output_path, title):
+    """
+    Plot confusion matrix with normalized coloring and percentage+count annotations.
+    """
+    if mean_cm_counts is None or mean_cm_normalized is None:
+        return
+
+    if not class_names or len(class_names) != mean_cm_normalized.shape[0]:
+        class_names = [str(i) for i in range(mean_cm_normalized.shape[0])]
+
+    annot = np.empty(mean_cm_normalized.shape, dtype=object)
+    for i in range(mean_cm_normalized.shape[0]):
+        for j in range(mean_cm_normalized.shape[1]):
+            annot[i, j] = f"{mean_cm_normalized[i, j] * 100:.1f}%\n({mean_cm_counts[i, j]:.1f})"
+
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(
+        mean_cm_normalized,
+        annot=annot,
+        fmt="",
+        cmap="Blues",
+        vmin=0.0,
+        vmax=1.0,
+        xticklabels=class_names,
+        yticklabels=class_names,
+        cbar_kws={"label": "Row-normalized percentage"}
+    )
+    plt.title(title)
+    plt.ylabel("True Label")
+    plt.xlabel("Predicted Label")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
 
 
 def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_factor=False, only_show_mean=False, splits=None):
@@ -100,6 +208,12 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_fact
                 "recall": eval_summary["recall"],
                 "f1_score": eval_summary["f1_score"]
             }
+
+            cm_counts, cm_normalized, class_names = _load_confusion_matrices(run_dir, evaluation_split, eval_summary)
+            run_data["cm_counts"] = cm_counts.tolist() if cm_counts is not None else None
+            run_data["cm_normalized"] = cm_normalized.tolist() if cm_normalized is not None else None
+            run_data["class_names"] = class_names
+
             splits_data[split_name]["runs"].append(run_data)
             logger.info(f"Loaded results for {split_name} run{run_number} ({evaluation_split}): acc={eval_summary['accuracy']:.4f}, f1={eval_summary['f1_score']:.4f}")
 
@@ -115,6 +229,71 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_fact
             split_data["std_accuracy"] = float(np.std(accuracies, ddof=1))
             split_data["mean_f1_score"] = float(np.mean(f1_scores))
             split_data["std_f1_score"] = float(np.std(f1_scores, ddof=1))
+
+            # Aggregate confusion matrices (counts and percentages) across runs.
+            cm_counts_list = [np.array(run["cm_counts"], dtype=float) for run in runs if run.get("cm_counts") is not None]
+            cm_norm_list = [np.array(run["cm_normalized"], dtype=float) for run in runs if run.get("cm_normalized") is not None]
+
+            # Keep only matrices with matching shapes.
+            if cm_counts_list:
+                target_shape = cm_counts_list[0].shape
+                cm_counts_list = [cm for cm in cm_counts_list if cm.shape == target_shape]
+            if cm_norm_list:
+                target_shape = cm_norm_list[0].shape
+                cm_norm_list = [cm for cm in cm_norm_list if cm.shape == target_shape]
+
+            if cm_counts_list and not cm_norm_list:
+                cm_norm_list = []
+                for cm_counts in cm_counts_list:
+                    row_sums = cm_counts.sum(axis=1, keepdims=True)
+                    cm_norm = np.divide(
+                        cm_counts,
+                        row_sums,
+                        out=np.zeros_like(cm_counts, dtype=float),
+                        where=row_sums != 0
+                    )
+                    cm_norm_list.append(cm_norm)
+
+            if cm_counts_list and cm_norm_list and cm_counts_list[0].shape == cm_norm_list[0].shape:
+                mean_cm_counts = np.mean(cm_counts_list, axis=0)
+                mean_cm_normalized = np.mean(cm_norm_list, axis=0)
+
+                split_data["mean_confusion_matrix_counts"] = mean_cm_counts.tolist()
+                split_data["mean_confusion_matrix_percentages"] = mean_cm_normalized.tolist()
+
+                class_names = []
+                for run in runs:
+                    candidate = run.get("class_names")
+                    if candidate and len(candidate) == mean_cm_normalized.shape[0]:
+                        class_names = candidate
+                        break
+                split_data["class_names"] = class_names
+
+                cm_counts_save_path = output_dir / f"mean_confusion_matrix_counts_{split_name}_{evaluation_split}.npy"
+                cm_percent_save_path = output_dir / f"mean_confusion_matrix_percentages_{split_name}_{evaluation_split}.npy"
+                np.save(cm_counts_save_path, mean_cm_counts)
+                np.save(cm_percent_save_path, mean_cm_normalized)
+
+                cm_plot_path = output_dir / f"mean_confusion_matrix_{split_name}_{evaluation_split}.png"
+                _plot_mean_confusion_matrix(
+                    mean_cm_counts=mean_cm_counts,
+                    mean_cm_normalized=mean_cm_normalized,
+                    class_names=class_names,
+                    output_path=cm_plot_path,
+                    title=f"Mean Confusion Matrix ({evaluation_split})\n{split_name}"
+                )
+                add_note(
+                    notes_path=output_dir / "../notes.md",
+                    title=f"Mean confusion matrix ({split_name}, {evaluation_split})",
+                    content=cm_plot_path
+                )
+                logger.info(f"Mean confusion matrix saved to: {cm_plot_path}")
+            else:
+                logger.warning(
+                    f"No compatible confusion matrix data for {split_name} ({evaluation_split}). "
+                    "Expected confusion_matrix_<split>.npy and/or confusion_matrix_<split>_normalized.npy per run."
+                )
+
             logger.info(f"Summary for {split_name} ({evaluation_split}):")
             logger.info(f"  Runs: {len(runs)}")
             logger.info(f"  Mean Accuracy: {split_data['mean_accuracy']:.4f} ± {split_data['std_accuracy']:.4f}")
