@@ -44,6 +44,11 @@ LATEX_VALUE_PATTERN = re.compile(
 )
 
 
+def legend_is_off(table: dict) -> bool:
+    value = table.get("legend")
+    return isinstance(value, str) and value.strip().lower() == "off"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Plot grouped bar charts from exported table.json files.",
@@ -349,6 +354,7 @@ def build_custom_records(
     ratio_label = "Ratio"
     metric_name = "metric"
     mode_name = "mode"
+    legend_off_by_method: dict[str, bool] = {}
 
     for idx, table in selected_tables:
         rows = table.get("rows") or []
@@ -366,6 +372,7 @@ def build_custom_records(
         method_value = str(table.get("method_name") or f"table_{idx}")
         if method_value not in method_order:
             method_order.append(method_value)
+        legend_off_by_method[method_value] = legend_is_off(table)
 
         metric_name = str(table.get("metric", metric_name))
         mode_name = str(table.get("mode", mode_name))
@@ -421,6 +428,7 @@ def build_custom_records(
     metadata = {
         "mode": mode_name,
         "metric": metric_name,
+        "legend_off_by_method": legend_off_by_method,
         "labels": {
             "method": "Method",
             "split": split_label,
@@ -451,6 +459,7 @@ def plot_customized_views(
     labels = metadata["labels"]
     orders = metadata["orders"]
     metric = metadata["metric"]
+    legend_off_by_method = metadata.get("legend_off_by_method", {})
 
     chart_values = orders[chart_dim]
     persistent_x_order: list[str] | None = None
@@ -618,21 +627,57 @@ def plot_customized_views(
 
         fig_width = max(8, 1.1 * len(x_values) + 3)
         fig, ax = plt.subplots(figsize=(fig_width, 6))
+        cmap = plt.get_cmap("tab10")
+        color_by_group = {
+            group_name: cmap(i % cmap.N)
+            for i, group_name in enumerate(group_values)
+        }
 
-        for i, group_value in enumerate(group_values):
-            offset = (i - (n_groups - 1) / 2) * bar_width
-            ax.bar(
-                x_pos + offset,
-                values[group_value],
-                width=bar_width,
-                yerr=errors[group_value],
-                capsize=4,
-                label=str(group_value),
-                alpha=1.0,
-                edgecolor="black",
-                linewidth=0.6,
-                zorder=3,
-            )
+        labeled_groups: set[str] = set()
+        for xi, x_center in enumerate(x_pos):
+            present_groups = [
+                group_value
+                for group_value in group_values
+                if np.isfinite(values[group_value][xi])
+            ]
+            if not present_groups:
+                continue
+
+            current_group_width = min(0.85, 0.22 * max(1, len(present_groups)))
+            current_bar_width = current_group_width / max(1, len(present_groups))
+
+            for i, group_value in enumerate(present_groups):
+                offset = (i - (len(present_groups) - 1) / 2) * current_bar_width
+                y = float(values[group_value][xi])
+                yerr = float(errors[group_value][xi])
+                if not np.isfinite(yerr):
+                    yerr = 0.0
+
+                # Resolve which method this bar originates from so per-method legend toggles apply
+                # even when plotting by split/ratio combinations.
+                if x_dim == "method":
+                    method_for_bar = str(x_values[xi])
+                elif group_dim == "method":
+                    method_for_bar = str(group_value)
+                else:
+                    method_for_bar = str(chart_value)
+
+                legend_allowed = not bool(legend_off_by_method.get(method_for_bar, False))
+                label = str(group_value) if (legend_allowed and group_value not in labeled_groups) else "_nolegend_"
+                ax.bar(
+                    x_center + offset,
+                    y,
+                    width=current_bar_width,
+                    yerr=yerr,
+                    capsize=4,
+                    label=label,
+                    color=color_by_group[group_value],
+                    alpha=1.0,
+                    edgecolor="black",
+                    linewidth=0.6,
+                    zorder=3,
+                )
+                labeled_groups.add(group_value)
 
         # Draw baseline dotted line and shaded error region behind bars.
         if show_baseline_line:
@@ -651,7 +696,7 @@ def plot_customized_views(
                 color="#ffb3b3",
                 alpha=0.35,
                 zorder=-20,
-                label="Baseline Error Band",
+                label="_nolegend_",
             )
             ax.plot(
                 bx,
@@ -674,7 +719,15 @@ def plot_customized_views(
         apply_tight_ylim(ax, values, errors, global_range)
 
         ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.5)
-        ax.legend(title=labels[group_dim], loc="best")
+        show_legend = True
+        if chart_dim == "method":
+            show_legend = not bool(legend_off_by_method.get(str(chart_value), False))
+        elif len(present_x) == 1:
+            only_value = next(iter(present_x))
+            if x_dim == "method":
+                show_legend = not bool(legend_off_by_method.get(str(only_value), False))
+        if show_legend:
+            ax.legend(title=labels[group_dim], loc="best")
         fig.tight_layout()
 
         if output_dir is not None:
@@ -722,24 +775,47 @@ def plot_table(
 
     fig_width = max(8, 1.1 * n_groups + 3)
     fig, ax = plt.subplots(figsize=(fig_width, 6))
+    cmap = plt.get_cmap("tab20")
+    color_by_method = {
+        method: cmap(i % cmap.N)
+        for i, method in enumerate(ordered_methods)
+    }
 
-    for i, method in enumerate(ordered_methods):
-        offset = (i - (n_methods - 1) / 2) * bar_width
-        y = values[method]
-        yerr = errors[method]
-        label = method_display_names.get(method, prettify_label(method))
+    labeled_methods: set[str] = set()
+    for xi, x_center in enumerate(x):
+        present_methods = [
+            method for method in ordered_methods if np.isfinite(values[method][xi])
+        ]
+        if not present_methods:
+            continue
 
-        ax.bar(
-            x + offset,
-            y,
-            width=bar_width,
-            yerr=yerr,
-            capsize=4,
-            label=label,
-            alpha=1.0,
-            edgecolor="black",
-            linewidth=0.6,
-        )
+        current_group_width = min(0.85, 0.22 * max(1, len(present_methods)))
+        current_bar_width = current_group_width / max(1, len(present_methods))
+
+        for i, method in enumerate(present_methods):
+            offset = (i - (len(present_methods) - 1) / 2) * current_bar_width
+            y = float(values[method][xi])
+            yerr = float(errors[method][xi])
+            if not np.isfinite(yerr):
+                yerr = 0.0
+
+            label = method_display_names.get(method, prettify_label(method))
+            if method in labeled_methods:
+                label = "_nolegend_"
+
+            ax.bar(
+                x_center + offset,
+                y,
+                width=current_bar_width,
+                yerr=yerr,
+                capsize=4,
+                label=label,
+                color=color_by_method[method],
+                alpha=1.0,
+                edgecolor="black",
+                linewidth=0.6,
+            )
+            labeled_methods.add(method)
 
     mode = table.get("mode", "table")
     metric = table.get("metric", "metric")
@@ -758,7 +834,8 @@ def plot_table(
     apply_tight_ylim(ax, values, errors, global_range)
 
     ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.5)
-    ax.legend(title="Method", loc="best")
+    if not legend_is_off(table):
+        ax.legend(title="Method", loc="best")
 
     fig.tight_layout()
 

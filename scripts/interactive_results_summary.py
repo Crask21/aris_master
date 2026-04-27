@@ -140,6 +140,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--filter",
+        "-f",
+        dest="evaluation_id_filter",
+        type=str,
+        default=None,
+        help=(
+            "Optional comma-separated keywords to filter interactive evaluation_id choices, "
+            "e.g. --filter '1000_real, lr_scheduler'."
+        ),
+    )
+    parser.add_argument(
         "--use-all-samples",
         action="store_true",
         help=(
@@ -292,10 +303,73 @@ def prompt_for_evaluation_ids(results: list[ResultFile]) -> list[ResultFile]:
     return [item for item in results if item.evaluation_id in selected_set]
 
 
+def parse_filter_keywords(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for token in raw.split(","):
+        keyword = token.strip()
+        if not keyword:
+            continue
+        normalized = keyword.lower()
+        if normalized in seen:
+            continue
+        keywords.append(keyword)
+        seen.add(normalized)
+
+    return keywords
+
+
+def filter_results_by_evaluation_id_keywords(
+    results: list[ResultFile],
+    keywords: list[str],
+) -> list[ResultFile]:
+    if not keywords:
+        return list(results)
+
+    lowered_keywords = [keyword.lower() for keyword in keywords]
+    return [
+        item
+        for item in results
+        if any(keyword in item.evaluation_id.lower() for keyword in lowered_keywords)
+    ]
+
+
+def prompt_for_evaluation_id_filter_keywords() -> list[str]:
+    inquirer = get_inquirer_module()
+
+    use_filter_answers = inquirer.prompt(
+        [
+            inquirer.Confirm(
+                "use_filter",
+                message="Filter evaluation_id choices with comma-separated keywords?",
+                default=False,
+            )
+        ]
+    )
+    use_filter = bool(use_filter_answers.get("use_filter")) if use_filter_answers else False
+    if not use_filter:
+        return []
+
+    keyword_answers = inquirer.prompt(
+        [
+            inquirer.Text(
+                "keywords",
+                message="Enter comma-separated keywords",
+            )
+        ]
+    )
+    raw_keywords = keyword_answers.get("keywords", "") if keyword_answers else ""
+    return parse_filter_keywords(raw_keywords)
+
+
 def prompt_for_baseline_evaluation_id(
     results: list[ResultFile],
     selected_results: list[ResultFile],
     baseline_evaluation_id: str | None,
+    filter_keywords: list[str] | None = None,
 ) -> ResultFile:
     inquirer = get_inquirer_module()
 
@@ -314,6 +388,8 @@ def prompt_for_baseline_evaluation_id(
         return by_id[baseline_evaluation_id]
 
     candidate_results = [item for item in results if item.evaluation_id not in selected_ids]
+    if filter_keywords:
+        candidate_results = filter_results_by_evaluation_id_keywords(candidate_results, filter_keywords)
     if not candidate_results:
         raise ValueError("No candidate baseline evaluation_id remains after DA method selection.")
 
@@ -872,10 +948,14 @@ def resolve_expansion_baselines_by_real_count(
     selected_results: list[ResultFile],
     required_real_counts: list[int],
     baseline_ids_from_flags: list[str] | None,
+    filter_keywords: list[str] | None = None,
+    show_result_paths_in_prompt: bool = True,
 ) -> dict[int, ResultFile]:
     by_id = {item.evaluation_id: item for item in results}
     selected_ids = {item.evaluation_id for item in selected_results}
     candidate_results = [item for item in results if item.evaluation_id not in selected_ids]
+    if filter_keywords:
+        candidate_results = filter_results_by_evaluation_id_keywords(candidate_results, filter_keywords)
 
     if not candidate_results:
         raise ValueError("No candidate baseline evaluation_id remains after DA method selection.")
@@ -921,10 +1001,13 @@ def resolve_expansion_baselines_by_real_count(
             mapping[real_count] = matches[0]
             continue
 
-        choices = [
-            (f"{item.evaluation_id}  ({item.file_path.parent})", item.evaluation_id)
-            for item in matches
-        ]
+        if show_result_paths_in_prompt:
+            choices = [
+                (f"{item.evaluation_id}  ({item.file_path.parent})", item.evaluation_id)
+                for item in matches
+            ]
+        else:
+            choices = [item.evaluation_id for item in matches]
         answers = inquirer.prompt(
             [
                 inquirer.List(
@@ -1902,6 +1985,9 @@ def main() -> None:
     if args.baseline_evaluation_ids:
         baseline_ids_from_flags = [eid for group in args.baseline_evaluation_ids for eid in group]
 
+    filter_keywords = parse_filter_keywords(args.evaluation_id_filter)
+    interactive_filter_active = False
+
     discovered = discover_results_files(args.test_dir)
     if not discovered:
         raise SystemExit("No valid results.json files with evaluation_id were found.")
@@ -1923,7 +2009,21 @@ def main() -> None:
         if not selected_results:
             raise ValueError("No valid DA method evaluation_id provided via flags.")
     else:
-        selected_results = prompt_for_evaluation_ids(sorted_results)
+        if not filter_keywords:
+            filter_keywords = prompt_for_evaluation_id_filter_keywords()
+            interactive_filter_active = bool(filter_keywords)
+
+        filtered_results = filter_results_by_evaluation_id_keywords(sorted_results, filter_keywords)
+        if filter_keywords and not filtered_results:
+            raise ValueError(
+                "No evaluation_id values matched the filter keywords: "
+                f"{', '.join(filter_keywords)}"
+            )
+
+        if filter_keywords and (interactive_filter_active or args.evaluation_id_filter):
+            print(f"Using evaluation_id filter keywords: {', '.join(filter_keywords)}")
+
+        selected_results = prompt_for_evaluation_ids(filtered_results)
 
     if args.expansion_ratio:
         if split_names_from_flags:
@@ -1952,6 +2052,8 @@ def main() -> None:
             selected_results=selected_results,
             required_real_counts=required_real_counts,
             baseline_ids_from_flags=baseline_ids_from_flags,
+            filter_keywords=filter_keywords,
+            show_result_paths_in_prompt=False,
         )
 
         selected_metrics = resolve_metric_selection_expansion(
@@ -2027,6 +2129,7 @@ def main() -> None:
         results=sorted_results,
         selected_results=selected_results,
         baseline_evaluation_id=baseline_evaluation_id,
+        filter_keywords=filter_keywords,
     )
 
     if split_names_from_flags:

@@ -35,6 +35,9 @@ class ResNetDataloader(dataloaderInterface):
         # Extract "augmentation.use_data_augmentations_real" from the config file
         self.data_augmentations_real = config.get("augmentation", {}).get("use_data_augmentations_real", False)
         self.data_augmentations_synthetic = config.get("augmentation", {}).get("use_data_augmentations_synthetic", False)
+        aug_cfg = config.get("augmentation", {})
+        self.mixup_config = aug_cfg.get("mixup", {}) if isinstance(aug_cfg.get("mixup", {}), dict) else {}
+        self.cutmix_config = aug_cfg.get("cutmix", {}) if isinstance(aug_cfg.get("cutmix", {}), dict) else {}
         print(f"[INFO] Data augmentations enabled for real images: {self.data_augmentations_real}")
         print(f"[INFO] Data augmentations enabled for synthetic images: {self.data_augmentations_synthetic}")
         self.real_image_count = data_config["real_image_count"]
@@ -69,6 +72,163 @@ class ResNetDataloader(dataloaderInterface):
 
     def set_training_augmentations(self):
         return super().set_training_augmentations()
+
+    def _mixup_enabled(self) -> bool:
+        return bool(self.mixup_config.get("enabled", False) and self.mixup_config.get("p", 0.0) > 0.0)
+
+    def _cutmix_enabled(self) -> bool:
+        return bool(self.cutmix_config.get("enabled", False) and self.cutmix_config.get("p", 0.0) > 0.0)
+
+    @staticmethod
+    def _sample_lambda(alpha: float, device: torch.device) -> float:
+        if alpha <= 0.0:
+            return 1.0
+        dist = torch.distributions.Beta(alpha, alpha)
+        return float(dist.sample().to(device=device).item())
+
+    @staticmethod
+    def _rand_bbox(size, lam):
+        _, _, h, w = size
+        cut_ratio = float(np.sqrt(1.0 - lam))
+        cut_w = int(w * cut_ratio)
+        cut_h = int(h * cut_ratio)
+
+        cx = int(torch.randint(0, w, (1,)).item())
+        cy = int(torch.randint(0, h, (1,)).item())
+
+        x1 = np.clip(cx - cut_w // 2, 0, w)
+        y1 = np.clip(cy - cut_h // 2, 0, h)
+        x2 = np.clip(cx + cut_w // 2, 0, w)
+        y2 = np.clip(cy + cut_h // 2, 0, h)
+        return x1, y1, x2, y2
+
+    def _apply_mixup(self, inputs: torch.Tensor, labels: torch.Tensor):
+        alpha = float(self.mixup_config.get("alpha", 0.2))
+        lam = self._sample_lambda(alpha, inputs.device)
+        index = torch.randperm(inputs.size(0), device=inputs.device)
+        mixed_inputs = lam * inputs + (1.0 - lam) * inputs[index]
+        labels_a, labels_b = labels, labels[index]
+        return mixed_inputs, labels_a, labels_b, lam
+
+    def _apply_cutmix(self, inputs: torch.Tensor, labels: torch.Tensor):
+        alpha = float(self.cutmix_config.get("alpha", 1.0))
+        lam = self._sample_lambda(alpha, inputs.device)
+        index = torch.randperm(inputs.size(0), device=inputs.device)
+        labels_a, labels_b = labels, labels[index]
+
+        x1, y1, x2, y2 = self._rand_bbox(inputs.size(), lam)
+        mixed_inputs = inputs.clone()
+        mixed_inputs[:, :, y1:y2, x1:x2] = inputs[index, :, y1:y2, x1:x2]
+
+        patch_area = float((x2 - x1) * (y2 - y1))
+        total_area = float(inputs.size(-1) * inputs.size(-2))
+        lam_adjusted = 1.0 - (patch_area / total_area if total_area > 0 else 0.0)
+        return mixed_inputs, labels_a, labels_b, lam_adjusted
+
+    def apply_batch_mixing(self, inputs: torch.Tensor, labels: torch.Tensor):
+        if inputs.size(0) < 2:
+            return inputs, labels, labels, 1.0, "none"
+
+        cutmix_p = float(self.cutmix_config.get("p", 0.0)) if self._cutmix_enabled() else 0.0
+        mixup_p = float(self.mixup_config.get("p", 0.0)) if self._mixup_enabled() else 0.0
+
+        if cutmix_p <= 0.0 and mixup_p <= 0.0:
+            return inputs, labels, labels, 1.0, "none"
+
+        r = torch.rand(1).item()
+        if cutmix_p > 0.0 and r < cutmix_p:
+            mixed_inputs, labels_a, labels_b, lam = self._apply_cutmix(inputs, labels)
+            return mixed_inputs, labels_a, labels_b, lam, "cutmix"
+
+        if mixup_p > 0.0 and r < (cutmix_p + mixup_p):
+            mixed_inputs, labels_a, labels_b, lam = self._apply_mixup(inputs, labels)
+            return mixed_inputs, labels_a, labels_b, lam, "mixup"
+
+        return inputs, labels, labels, 1.0, "none"
+
+    @staticmethod
+    def mixed_loss(criterion, outputs, labels_a, labels_b, lam):
+        return lam * criterion(outputs, labels_a) + (1.0 - lam) * criterion(outputs, labels_b)
+
+    def _save_preview_grid(
+        self,
+        images: torch.Tensor,
+        labels_a: torch.Tensor,
+        labels_b: torch.Tensor | None,
+        output_name: str,
+        show: bool,
+        lam: float | None = None,
+    ) -> None:
+        num_images = min(16, images.size(0))
+        images = images[:num_images]
+        labels_a = labels_a[:num_images]
+        labels_b = labels_b[:num_images] if labels_b is not None else None
+
+        # Convert from training range [-1, 1] to display range [0, 1].
+        images = (images + 1.0) / 2.0
+        images = torch.clamp(images, 0.0, 1.0)
+
+        grid_size = int(np.ceil(np.sqrt(num_images)))
+        fig, axes = plt.subplots(grid_size, grid_size, figsize=(10, 10))
+        axes = np.array(axes).flatten()
+
+        for idx, ax in enumerate(axes):
+            if idx < num_images:
+                img = images[idx].detach().cpu().permute(1, 2, 0).numpy()
+                ax.imshow(img)
+                class_a = self.classes[int(labels_a[idx])]
+                if labels_b is None:
+                    ax.set_title(class_a)
+                else:
+                    class_b = self.classes[int(labels_b[idx])]
+                    if lam is None:
+                        ax.set_title(f"{class_a} | {class_b}")
+                    else:
+                        ax.set_title(f"{class_a} | {class_b} ({lam:.2f})")
+                ax.axis("off")
+            else:
+                ax.axis("off")
+
+        plt.tight_layout()
+        output_path = os.path.join(self.output_dir, output_name)
+        plt.savefig(output_path)
+        print(f"[INFO] Preview saved: {output_path}")
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    def preview_dataloader(self, dataloader, num_images=16, labels=True, show=True):
+        super().preview_dataloader(dataloader, num_images=num_images, labels=labels, show=show)
+
+        if not (self._mixup_enabled() or self._cutmix_enabled()):
+            return
+
+        batch = next(iter(dataloader))
+        base_images = batch["image"]
+        base_labels = batch["class"]
+
+        if self._mixup_enabled():
+            mixup_images, labels_a, labels_b, lam = self._apply_mixup(base_images.clone(), base_labels.clone())
+            self._save_preview_grid(
+                images=mixup_images,
+                labels_a=labels_a,
+                labels_b=labels_b,
+                output_name="dataloader_preview_mixup.png",
+                show=show,
+                lam=lam,
+            )
+
+        if self._cutmix_enabled():
+            cutmix_images, labels_a, labels_b, lam = self._apply_cutmix(base_images.clone(), base_labels.clone())
+            self._save_preview_grid(
+                images=cutmix_images,
+                labels_a=labels_a,
+                labels_b=labels_b,
+                output_name="dataloader_preview_cutmix.png",
+                show=show,
+                lam=lam,
+            )
 
 # ----------------- Generate data dictionary from config file ---------------- #
     def generate_data_split(self, split, image_count=None):

@@ -55,6 +55,11 @@ class ResNet18Test:
         self.batch_size = self.config["hyperparameters"]["batch_size"]
         self.num_epochs = self.config["hyperparameters"]["epochs"]
         self.learning_rate = self.config["hyperparameters"]["learning_rate"]
+        try:
+            self.warmup_epochs = int(self.config["hyperparameters"].get("warmup_epochs", 0))
+        except (TypeError, ValueError):
+            logger.warning("Invalid hyperparameters.warmup_epochs. Falling back to 0.")
+            self.warmup_epochs = 0
         self.weight_decay = 0.0005
         
         self.seed = self.config["logging"]["seed"]
@@ -73,6 +78,8 @@ class ResNet18Test:
         # Loss function, optimizer, device
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        self.scheduler = None
+        self.setup_scheduler()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = self.model.to(self.device)
         
@@ -81,15 +88,88 @@ class ResNet18Test:
         
         
         
+    def setup_scheduler(self):
+        scheduler_cfg = self.config.get("scheduler", self.config.get("hyperparameters", {}).get("scheduler", {}))
+        if not isinstance(scheduler_cfg, dict):
+            logger.warning("Invalid scheduler config type '%s'. Scheduler disabled.", type(scheduler_cfg).__name__)
+            return
+
+        if not scheduler_cfg.get("enabled", False):
+            return
+
+        scheduler_type = str(scheduler_cfg.get("type", "cosine")).lower()
+        if scheduler_type != "cosine":
+            logger.warning(
+                "Only cosine scheduler is supported for ResNet18 training. Got '%s'. Scheduler disabled.",
+                scheduler_type,
+            )
+            return
+
+        try:
+            warmup_epochs = max(0, self.warmup_epochs)
+            if warmup_epochs != self.warmup_epochs:
+                logger.warning("Negative warmup_epochs is not allowed. Using 0.")
+
+            t_max = int(scheduler_cfg.get("t_max", max(1, self.num_epochs - warmup_epochs)))
+            t_max = max(1, t_max)
+            eta_min = float(scheduler_cfg.get("eta_min", 0.0))
+
+            cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=t_max, eta_min=eta_min)
+
+            if warmup_epochs > 0:
+                warmup_start_factor = max(1e-6, 1.0 / float(warmup_epochs))
+                warmup_scheduler = optim.lr_scheduler.LinearLR(
+                    self.optimizer,
+                    start_factor=warmup_start_factor,
+                    end_factor=1.0,
+                    total_iters=warmup_epochs,
+                )
+                self.scheduler = optim.lr_scheduler.SequentialLR(
+                    self.optimizer,
+                    schedulers=[warmup_scheduler, cosine_scheduler],
+                    milestones=[warmup_epochs],
+                )
+                logger.info(
+                    "Enabled cosine scheduler with warmup (warmup_epochs=%s, t_max=%s, eta_min=%s)",
+                    warmup_epochs,
+                    t_max,
+                    eta_min,
+                )
+            else:
+                self.scheduler = cosine_scheduler
+                logger.info("Enabled CosineAnnealingLR scheduler (t_max=%s, eta_min=%s)", t_max, eta_min)
+        except (TypeError, ValueError) as e:
+            logger.warning("Failed to initialize scheduler '%s': %s. Scheduler disabled.", scheduler_type, e)
+            self.scheduler = None
+
+    def _checkpoint_payload(self, epoch):
+        payload = {
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "train_loss": self.log_train_loss,
+            "val_loss": self.log_val_loss,
+            "train_acc": self.log_train_acc,
+            "val_acc": self.log_val_acc,
+            "val_f1": self.log_val_f1,
+        }
+        if self.scheduler is not None:
+            payload["scheduler_state_dict"] = self.scheduler.state_dict()
+        return payload
+
     def resume_from_checkpoint(self, resume_checkpoint_path=None):
         self.start_epoch = 0
         self.best_val_acc = -1.0
+        self.best_f1 = -1.0
         self.lowest_val_loss = float("inf")
         self.log_train_loss, self.log_val_loss, self.log_train_acc, self.log_val_acc = [], [], [], []
+        self.log_val_f1 = []
         
         self.checkpointing_steps = self.config["logging"].get("checkpointing_steps", 5)
         resume_from_checkpoint = self.config["logging"].get("resume_from_checkpoint", True)
         checkpoint_dir = self.config["logging"].get("checkpoint_dir", None)
+        # Metric used to choose the "best" checkpoint: 'val_acc' (default) or 'f1'
+        self.checkpoint_metric = self.config["logging"].get("checkpoint_metric", "val_acc")
         
         if resume_checkpoint_path is not None:
             checkpoint_dir = resume_checkpoint_path
@@ -100,11 +180,18 @@ class ResNet18Test:
                 checkpoint = torch.load(checkpoint_dir)
                 self.model.load_state_dict(checkpoint["model_state_dict"])
                 self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                scheduler_state = checkpoint.get("scheduler_state_dict", None)
+                if self.scheduler is not None and scheduler_state is not None:
+                    self.scheduler.load_state_dict(scheduler_state)
                 self.start_epoch = checkpoint["epoch"] + 1
                 self.log_train_loss = checkpoint["train_loss"]
                 self.log_val_loss = checkpoint["val_loss"]
                 self.log_train_acc = checkpoint["train_acc"]
                 self.log_val_acc = checkpoint["val_acc"]
+                # optional F1 log
+                self.log_val_f1 = checkpoint.get("val_f1", [])
+                if len(self.log_val_f1) > 0:
+                    self.best_f1 = max(self.log_val_f1)
                 self.best_val_acc = max(self.log_val_acc)
                 self.lowest_val_loss = min(self.log_val_loss)
                 logger.info(f"Resuming training from epoch {self.start_epoch}. Best val acc so far: {self.best_val_acc:.2f}%")
@@ -164,19 +251,26 @@ class ResNet18Test:
                     labels = labels.to(self.device)
                     time_gpu_start = time.perf_counter()
 
+                mixed_inputs, labels_a, labels_b, lam, mix_mode = self.waste_dataloader.apply_batch_mixing(inputs, labels)
+
                 self.optimizer.zero_grad()
-                outputs = self.model(inputs)
-                loss = self.criterion(outputs, labels)
+                outputs = self.model(mixed_inputs)
+                loss = self.waste_dataloader.mixed_loss(self.criterion, outputs, labels_a, labels_b, lam)
                 loss.backward()
                 self.optimizer.step()
                 if log_timing:
                     compute_end_event.record()
                     compute_event_pairs.append((compute_start_event, compute_end_event))
                 # Track training accuracy
-                running_loss += loss.item() * inputs.size(0)
+                running_loss += loss.item() * mixed_inputs.size(0)
                 _, predicted = outputs.max(1)
                 train_total += labels.size(0)
-                train_correct += predicted.eq(labels).sum().item()
+                if mix_mode == "none":
+                    train_correct += predicted.eq(labels).sum().item()
+                else:
+                    correct_a = predicted.eq(labels_a).sum().item()
+                    correct_b = predicted.eq(labels_b).sum().item()
+                    train_correct += lam * correct_a + (1.0 - lam) * correct_b
 
                 end_of_step_time = time.perf_counter()
 
@@ -197,6 +291,8 @@ class ResNet18Test:
             self.model.eval()
             val_loss_sum = 0.0
             val_correct, val_total = 0, 0
+            preds_list = []
+            labels_list = []
             with torch.no_grad():
                 for batch in self.val_loader:
                     labels = batch["class"]
@@ -210,16 +306,49 @@ class ResNet18Test:
                     _, predicted = outputs.max(1)
                     val_total += labels.size(0)
                     val_correct += (predicted == labels).sum().item()
+                    preds_list.append(predicted.cpu().numpy())
+                    labels_list.append(labels.cpu().numpy())
             val_loss = val_loss_sum / len(self.val_loader.dataset)
             val_acc = 100.0 * val_correct / val_total
-            
+
+            # Compute macro F1 (multi-class)
+            if len(preds_list) > 0:
+                preds_all = np.concatenate(preds_list)
+                labels_all = np.concatenate(labels_list)
+                num_classes = self.num_classes
+                eps = 1e-8
+                tp = np.zeros(num_classes, dtype=np.int64)
+                pred_counts = np.zeros(num_classes, dtype=np.int64)
+                true_counts = np.zeros(num_classes, dtype=np.int64)
+                for c in range(num_classes):
+                    tp[c] = int(((preds_all == c) & (labels_all == c)).sum())
+                    pred_counts[c] = int((preds_all == c).sum())
+                    true_counts[c] = int((labels_all == c).sum())
+                precision = tp / (pred_counts + eps)
+                recall = tp / (true_counts + eps)
+                f1_per_class = 2 * precision * recall / (precision + recall + eps)
+                val_f1 = float(np.mean(f1_per_class))
+            else:
+                val_f1 = 0.0
+
             self.log_val_loss.append(val_loss)
             self.log_val_acc.append(val_acc)
+            self.log_val_f1.append(val_f1)
             self.log_train_loss.append(train_loss)
             self.log_train_acc.append(train_acc)
 
             writer.add_scalar("Loss/val", val_loss, epoch)
             writer.add_scalar("Accuracy/val", val_acc, epoch)
+            writer.add_scalar("F1/val", val_f1, epoch)
+
+            if self.scheduler is not None:
+                prev_lr = float(self.optimizer.param_groups[0]["lr"])
+                self.scheduler.step()
+                new_lr = float(self.optimizer.param_groups[0]["lr"])
+                if new_lr != prev_lr:
+                    logger.info("LR scheduler update: %.8f -> %.8f", prev_lr, new_lr)
+
+            writer.add_scalar("LearningRate", float(self.optimizer.param_groups[0]["lr"]), epoch)
 
             # ----- Save checkpoint ----- #
             if val_acc > self.best_val_acc:
@@ -227,31 +356,27 @@ class ResNet18Test:
                 #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
                 output_name = f"resnet18_best_val_acc.ckpt"
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": self.model.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict(),
-                    "train_loss": self.log_train_loss,
-                    "val_loss": self.log_val_loss,
-                    "train_acc": self.log_train_acc,
-                    "val_acc": self.log_val_acc,
-                }, output_checkpoint_path)
+                torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
                 logging.info(f"New best val acc: {self.best_val_acc:.2f}%. Model checkpoint saved: {output_checkpoint_path}")
+            # Optionally save checkpoint based on highest F1 instead of val_acc
+            if getattr(self, "checkpoint_metric", "val_acc") == "f1":
+                # val_f1 should be defined for this epoch
+                try:
+                    if val_f1 > self.best_f1:
+                        self.best_f1 = val_f1
+                        output_name = f"resnet18_best_val_f1.ckpt"
+                        output_checkpoint_path = os.path.join(self.output_dir, output_name)
+                        torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
+                        logging.info(f"New best val F1: {self.best_f1:.4f}. Model checkpoint saved: {output_checkpoint_path}")
+                except NameError:
+                    pass
                 
             if val_loss < self.lowest_val_loss:
                 self.lowest_val_loss = val_loss
                 #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
                 output_name = f"resnet18_lowest_val_loss.ckpt"
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": self.model.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict(),
-                    "train_loss": self.log_train_loss,
-                    "val_loss": self.log_val_loss,
-                    "train_acc": self.log_train_acc,
-                    "val_acc": self.log_val_acc,
-                }, output_checkpoint_path)
+                torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
                 logging.info(f"New lowest val loss: {self.lowest_val_loss:.4f}. Model checkpoint saved: {output_checkpoint_path}")
                 
                 
@@ -261,15 +386,7 @@ class ResNet18Test:
                 #output_name = f"resnet18_epoch{epoch+1}.ckpt"
                 output_name = f"resnet18_latest.ckpt"
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": self.model.state_dict(),
-                    "optimizer_state_dict": self.optimizer.state_dict(),
-                    "train_loss": self.log_train_loss,
-                    "val_loss": self.log_val_loss,
-                    "train_acc": self.log_train_acc,
-                    "val_acc": self.log_val_acc,
-                }, output_checkpoint_path)
+                torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
                 # Update config file with checkpoint directory
                 self.config["logging"]["checkpoint_dir"] = str(output_checkpoint_path)
                 logging.info(f"Checkpoint saved: {output_checkpoint_path}")
