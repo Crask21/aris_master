@@ -236,6 +236,7 @@ if __name__ == "__main__":
                     config_path,
                     real_image_count=real_count,
                     synthetic_image_count=synthetic_count,
+                    run_number=run_number,
                     preview=args.verbose
                 )
                 try:
@@ -243,14 +244,16 @@ if __name__ == "__main__":
                         config_path,
                         resnet_dataloader=dataloader,
                         output_dir=run_dir,
-                        resume_checkpoint_path=task["resume_checkpoint"]
+                        resume_checkpoint_path=task["resume_checkpoint"],
+                        run_number=run_number
                     )
                 except Exception as e:
                     logger.error(f"Error initializing model for training: {e}")
                     model = ResNet18Test(
                         config_path,
                         resnet_dataloader=dataloader,
-                        output_dir=run_dir
+                        output_dir=run_dir,
+                        run_number=run_number
                     )
                 model.train()
                 model_instance = model
@@ -269,6 +272,7 @@ if __name__ == "__main__":
                     config_path,
                     real_image_count=real_count,
                     synthetic_image_count=synthetic_count,
+                    run_number=run_number,
                     preview=args.verbose
                 )
                 eval_dir = Path(run_dir) / "evaluation"

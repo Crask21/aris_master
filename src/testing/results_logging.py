@@ -295,6 +295,26 @@ class ResultsLogger:
             run_dir,
         )
         run_metrics["run_id"] = f"run{run_number}"
+        
+        # Extract seed from model instance or checkpoint
+        seed = None
+        if model_instance is not None and hasattr(model_instance, "seed"):
+            seed = model_instance.seed
+        elif run_dir is not None:
+            # Try to read seed from checkpoint
+            ckpt_path = (Path(run_dir) / "resnet18_lowest_val_loss.ckpt")
+            if ckpt_path.exists():
+                try:
+                    ckpt = torch.load(str(ckpt_path),
+                                      map_location="cpu",
+                                      weights_only=False)
+                    seed = ckpt.get("seed")
+                except Exception as e:
+                    logger.warning(f"Could not extract seed from checkpoint: {e}")
+        
+        if seed is not None:
+            run_metrics["seed"] = seed
+            logger.info(f"Logged seed {seed} for run {run_number}")
 
         ind_value = self.get_independent_variable_value(
             real_count, synthetic_count)

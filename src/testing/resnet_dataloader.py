@@ -27,7 +27,7 @@ from src.summarize_training.generate_config_summary import generate_data_summary
 #                                     Class                                    #
 # ---------------------------------------------------------------------------- #
 class ResNetDataloader(dataloaderInterface):
-    def __init__(self, config_path,real_image_count=None, synthetic_image_count=None, **kwargs):
+    def __init__(self, config_path, real_image_count=None, synthetic_image_count=None, run_number=None, **kwargs):
         
         with open(config_path, 'r') as f:
             config = json.load(f)
@@ -42,7 +42,7 @@ class ResNetDataloader(dataloaderInterface):
         print(f"[INFO] Data augmentations enabled for synthetic images: {self.data_augmentations_synthetic}")
         self.real_image_count = data_config["real_image_count"]
         self.synthetic_image_count = data_config["synthetic_image_count"]
-        self.prefetch_factor = config.get("hyperparameters", {}).get("dataloader_prefetch_factor", 2)
+        self.prefetch_factor = config.get("hyperparameters", {}).get("dataloader_prefetch_factor", 6)
         
         if real_image_count is not None:
             self.real_image_count = real_image_count
@@ -50,18 +50,23 @@ class ResNetDataloader(dataloaderInterface):
             self.synthetic_image_count = synthetic_image_count
 
         if not isinstance(self.prefetch_factor, int) or self.prefetch_factor < 1:
-            print(f"[WARNING] Invalid dataloader_prefetch_factor={self.prefetch_factor}. Falling back to 2.")
-            self.prefetch_factor = 2
+            print(f"[WARNING] Invalid dataloader_prefetch_factor={self.prefetch_factor}. Falling back to 6.")
+            self.prefetch_factor = 6
 
-        
+        print(f"[INFO] Dataloader prefetch factor set to: {self.prefetch_factor}")
         
         # [Assertion] Assert that either real_image_count or synthetic_image_count is specified in the config file
         assert self.real_image_count is not None or self.synthetic_image_count is not None, \
             f"Either real_image_count or synthetic_image_count must be specified in the config file. Please check the config file and specify at least one of them.\n Config file: {Path(config_path).resolve()}"
         
-        # Make a random seed each run
-        self.seed = np.random.randint(0, 100000)
-        print(f"[INFO] Random seed for this run: {self.seed}")
+        # Use deterministic seed: if run_number is provided, use it as seed
+        # Otherwise fall back to random behavior (for backwards compatibility)
+        if run_number is not None:
+            self.seed = run_number
+            print(f"[INFO] Using deterministic seed based on run_number: {self.seed}")
+        else:
+            self.seed = np.random.randint(0, 100000)
+            print(f"[INFO] Random seed for this run: {self.seed}")
         
         super().__init__(config_path, **kwargs)
         

@@ -2,7 +2,6 @@
 #                                    Imports                                   #
 # ---------------------------------------------------------------------------- #
 import json
-from random import random
 import sys
 import torch
 import torch.nn as nn
@@ -45,7 +44,7 @@ def load_resnet18(num_classes):
 
 
 class ResNet18Test:
-    def __init__(self, config_path, resnet_dataloader: ResNetDataloader=None, output_dir=None, resume_checkpoint_path=None):
+    def __init__(self, config_path, resnet_dataloader: ResNetDataloader=None, output_dir=None, resume_checkpoint_path=None, run_number=None):
         self.config_path = config_path
         logger.info(f"Loading config from: {config_path}")
         
@@ -60,16 +59,27 @@ class ResNet18Test:
         except (TypeError, ValueError):
             logger.warning("Invalid hyperparameters.warmup_epochs. Falling back to 0.")
             self.warmup_epochs = 0
-        self.weight_decay = 0.0005
+        self.weight_decay = self.config["hyperparameters"].get("weight_decay", 0.0005)
         
-        self.seed = self.config["logging"]["seed"]
+        self.run_number = run_number
         
         self.output_dir = output_dir if output_dir is not None else self.config["logging"]["output_dir"] + "/resnet18/"
         # Create output directory if it doesn't exist
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # Load data
+        # Load data first so we can extract seed from dataloader if available
         self.load_data(resnet_dataloader)
+        
+        # Determine seed: priority is run_number > dataloader seed > config seed
+        if run_number is not None:
+            self.seed = run_number
+            logger.info(f"Using deterministic seed based on run_number: {self.seed}")
+        elif hasattr(self.waste_dataloader, 'seed'):
+            self.seed = self.waste_dataloader.seed
+            logger.info(f"Using seed from dataloader: {self.seed}")
+        else:
+            self.seed = self.config["logging"].get("seed", 42)
+            logger.info(f"Using config seed: {self.seed}")
         
         # Load model 
         self.model = torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)
@@ -145,6 +155,8 @@ class ResNet18Test:
     def _checkpoint_payload(self, epoch):
         payload = {
             "epoch": epoch,
+            "seed": self.seed,
+            "run_number": self.run_number,
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "train_loss": self.log_train_loss,
@@ -196,7 +208,10 @@ class ResNet18Test:
                 self.lowest_val_loss = min(self.log_val_loss)
                 logger.info(f"Resuming training from epoch {self.start_epoch}. Best val acc so far: {self.best_val_acc:.2f}%")
                 
+    @staticmethod
     def set_seed(seed=42):
+        """Set all random seeds for reproducibility."""
+        import random
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -204,13 +219,20 @@ class ResNet18Test:
         # For reproducibility (may impact performance)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+        logger.info(f"Set all random seeds to {seed}")
         
     def train(self):
+        # Set the random seed before training
+        ResNet18Test.set_seed(self.seed)
+        
         writer = SummaryWriter(self.output_dir)
         start_time = time.time()
         val_acc = 0
         val_loss = float("inf")
-        log_timing = False
+        
+        # Timing configuration
+        log_timing = True  # Enable timing for every epoch to find bottlenecks
+        
         # Print total number of parameters in the model
         total_params = sum(p.numel() for p in self.model.parameters())
         logger.info(f"Total parameters in ResNet18: {total_params}")
@@ -223,71 +245,101 @@ class ResNet18Test:
             running_loss = 0.0
             train_correct, train_total = 0, 0
 
+            # === Timing buckets for training loop ===
+            time_data_load = 0.0
+            time_data_transfer = 0.0
+            time_batch_mixing = 0.0
+            time_forward = 0.0
+            time_backward = 0.0
+            time_optim_step = 0.0
+            time_metrics = 0.0
+            
+            # === GPU-side metric accumulators (avoid .item() in loop) ===
+            loss_accumulator = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+            correct_accumulator = torch.tensor(0.0, dtype=torch.float32, device=self.device)
+            
             end_of_step_time = time.perf_counter()
-            time_spent_loading_data = 0.0
-            time_spent_h2d_transfer = 0.0
-            time_using_gpu = 0.0
-            transfer_event_pairs = []
-            compute_event_pairs = []
             
             for batch_idx, batch in tqdm(enumerate(self.train_loader)):
-                time_spent_loading_data += time.perf_counter() - end_of_step_time
-
+                # Time: Data loading from DataLoader
+                time_data_load += time.perf_counter() - end_of_step_time
+                
                 labels = batch["class"]
                 inputs = batch["image"]
-                if log_timing:
-                    transfer_start_event = torch.cuda.Event(enable_timing=True)
-                    transfer_end_event = torch.cuda.Event(enable_timing=True)
-                    transfer_start_event.record()
-                    inputs = inputs.to(self.device, non_blocking=True)
-                    labels = labels.to(self.device, non_blocking=True)
-                    transfer_end_event.record()
-                    transfer_event_pairs.append((transfer_start_event, transfer_end_event))
-                    compute_start_event = torch.cuda.Event(enable_timing=True)
-                    compute_end_event = torch.cuda.Event(enable_timing=True)
-                    compute_start_event.record()
-                else:
-                    inputs = inputs.to(self.device)
-                    labels = labels.to(self.device)
-                    time_gpu_start = time.perf_counter()
-
+                
+                # Time: Host->Device transfer
+                t_transfer_start = time.perf_counter()
+                inputs = inputs.to(self.device, non_blocking=True)
+                labels = labels.to(self.device, non_blocking=True)
+                torch.cuda.synchronize(self.device)  # Include GPU sync overhead in measurement
+                time_data_transfer += time.perf_counter() - t_transfer_start
+                
+                # Time: Batch mixing (mixup/cutmix)
+                t_mixing_start = time.perf_counter()
                 mixed_inputs, labels_a, labels_b, lam, mix_mode = self.waste_dataloader.apply_batch_mixing(inputs, labels)
+                time_batch_mixing += time.perf_counter() - t_mixing_start
 
+                # Time: Forward pass
+                t_forward_start = time.perf_counter()
                 self.optimizer.zero_grad()
                 outputs = self.model(mixed_inputs)
+                time_forward += time.perf_counter() - t_forward_start
+                
+                # Time: Loss computation and backward pass
+                t_backward_start = time.perf_counter()
                 loss = self.waste_dataloader.mixed_loss(self.criterion, outputs, labels_a, labels_b, lam)
                 loss.backward()
+                time_backward += time.perf_counter() - t_backward_start
+                
+                # Time: Optimizer step
+                t_optim_start = time.perf_counter()
                 self.optimizer.step()
-                if log_timing:
-                    compute_end_event.record()
-                    compute_event_pairs.append((compute_start_event, compute_end_event))
-                # Track training accuracy
-                running_loss += loss.item() * mixed_inputs.size(0)
+                time_optim_step += time.perf_counter() - t_optim_start
+                
+                # Time: Metric calculation (OPTIMIZED: GPU tensors, no sync in loop)
+                t_metrics_start = time.perf_counter()
+                # Accumulate loss on GPU (as tensor, no sync)
+                loss_accumulator += loss.detach() * mixed_inputs.size(0)
+                # Accumulate correct predictions on GPU
                 _, predicted = outputs.max(1)
                 train_total += labels.size(0)
                 if mix_mode == "none":
-                    train_correct += predicted.eq(labels).sum().item()
+                    # Keep on GPU - only convert to float tensor, no .item() call
+                    correct_accumulator += (predicted.eq(labels).sum().float())
                 else:
-                    correct_a = predicted.eq(labels_a).sum().item()
-                    correct_b = predicted.eq(labels_b).sum().item()
-                    train_correct += lam * correct_a + (1.0 - lam) * correct_b
+                    correct_a = predicted.eq(labels_a).sum().float()
+                    correct_b = predicted.eq(labels_b).sum().float()
+                    correct_accumulator += lam * correct_a + (1.0 - lam) * correct_b
+                time_metrics += time.perf_counter() - t_metrics_start
 
                 end_of_step_time = time.perf_counter()
+            
+            # === Single GPU-to-CPU transfer at end of epoch ===
+            torch.cuda.synchronize(self.device)  # Ensure all GPU ops are complete
+            running_loss = loss_accumulator.item()
+            train_correct = correct_accumulator.item()
 
-            if log_timing:
-                torch.cuda.synchronize(self.device)
-                time_spent_h2d_transfer = sum(start.elapsed_time(end) for start, end in transfer_event_pairs) / 1000.0
-                time_using_gpu = sum(start.elapsed_time(end) for start, end in compute_event_pairs) / 1000.0
-
-                print(f"[DEBUG] Epoch {epoch+1} - Time spent loading data: {time_spent_loading_data:.2f} seconds")
-                print(f"[DEBUG] Epoch {epoch+1} - Time spent host->device transfer: {time_spent_h2d_transfer:.2f} seconds")
-                print(f"[DEBUG] Epoch {epoch+1} - Time spent using GPU: {time_using_gpu:.2f} seconds")
+            # Log timing for training loop
+            num_batches = len(self.train_loader)
+            if log_timing and num_batches > 0:
+                logger.info(f"[TIMING] Epoch {epoch+1} training loop breakdown ({num_batches} batches):")
+                logger.info(f"  - Data loading:      {time_data_load:8.2f}s ({time_data_load/num_batches:6.3f}s/batch avg)")
+                logger.info(f"  - Host→Device:       {time_data_transfer:8.2f}s ({time_data_transfer/num_batches:6.3f}s/batch avg)")
+                logger.info(f"  - Batch mixing:      {time_batch_mixing:8.2f}s ({time_batch_mixing/num_batches:6.3f}s/batch avg)")
+                logger.info(f"  - Forward pass:      {time_forward:8.2f}s ({time_forward/num_batches:6.3f}s/batch avg)")
+                logger.info(f"  - Loss + Backward:   {time_backward:8.2f}s ({time_backward/num_batches:6.3f}s/batch avg)")
+                logger.info(f"  - Optimizer step:    {time_optim_step:8.2f}s ({time_optim_step/num_batches:6.3f}s/batch avg)")
+                logger.info(f"  - Metric tracking:   {time_metrics:8.2f}s ({time_metrics/num_batches:6.3f}s/batch avg)")
+                total_train_time = time_data_load + time_data_transfer + time_batch_mixing + time_forward + time_backward + time_optim_step + time_metrics
+                logger.info(f"  - TOTAL:             {total_train_time:8.2f}s")
         
             train_loss = running_loss / len(self.train_loader.dataset)
             train_acc = 100. * train_correct / train_total
             writer.add_scalar("Loss/train", train_loss, epoch)
             writer.add_scalar("Accuracy/train", train_acc, epoch)
             
+            # === Validation loop with timing ===
+            t_val_start = time.perf_counter()
             self.model.eval()
             val_loss_sum = 0.0
             val_correct, val_total = 0, 0
@@ -310,8 +362,11 @@ class ResNet18Test:
                     labels_list.append(labels.cpu().numpy())
             val_loss = val_loss_sum / len(self.val_loader.dataset)
             val_acc = 100.0 * val_correct / val_total
+            time_val = time.perf_counter() - t_val_start
+            if log_timing:
+                logger.info(f"[TIMING] Epoch {epoch+1} validation: {time_val:.2f}s ({len(self.val_loader)} batches)")
 
-            # Compute macro F1 (multi-class)
+            # Compute macro F1 (multi-class) - vectorized
             if len(preds_list) > 0:
                 preds_all = np.concatenate(preds_list)
                 labels_all = np.concatenate(labels_list)
@@ -351,9 +406,9 @@ class ResNet18Test:
             writer.add_scalar("LearningRate", float(self.optimizer.param_groups[0]["lr"]), epoch)
 
             # ----- Save checkpoint ----- #
+            t_ckpt_start = time.perf_counter()
             if val_acc > self.best_val_acc:
                 self.best_val_acc = val_acc
-                #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
                 output_name = f"resnet18_best_val_acc.ckpt"
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
                 torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
@@ -373,7 +428,6 @@ class ResNet18Test:
                 
             if val_loss < self.lowest_val_loss:
                 self.lowest_val_loss = val_loss
-                #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
                 output_name = f"resnet18_lowest_val_loss.ckpt"
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
                 torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
@@ -382,8 +436,6 @@ class ResNet18Test:
                 
             # Save checkpoint
             if (epoch + 1) % self.checkpointing_steps == 0 or epoch == self.num_epochs - 1:
-                #output_name = f"resnet18_epoch{epoch+1}_valacc{val_acc:.2f}_val_loss{val_loss:.4f}.ckpt"
-                #output_name = f"resnet18_epoch{epoch+1}.ckpt"
                 output_name = f"resnet18_latest.ckpt"
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
                 torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
@@ -393,7 +445,9 @@ class ResNet18Test:
                 logging.debug(f"Config path: {self.config_output_path}")
                 with open(self.config_output_path, "w") as f:
                     json.dump(self.config, f)
-            
+            time_ckpt = time.perf_counter() - t_ckpt_start
+            if log_timing:
+                logger.info(f"[TIMING] Epoch {epoch+1} checkpoint save: {time_ckpt:.2f}s")
             
             # -------------------------- Estimate remaining time ------------------------- #
             elapsed_time = time.time() - start_time
