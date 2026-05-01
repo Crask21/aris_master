@@ -262,6 +262,7 @@ if __name__ == "__main__":
                 action = "evaluate"
 
         # -- Evaluation --
+        
         if action == "evaluate":
             if not args.evaluate:
                 logger.info("[SKIP] --evaluate not set, skipping evaluation")
@@ -288,9 +289,10 @@ if __name__ == "__main__":
                     )
                 else:
                     logger.info("[SKIP] Validation evaluation already exists")
-
+                
                 if has_test_split_available:
                     if not test_summary_path.exists():
+                        logger.info("Test split detected, running test evaluation…")
                         evaluate_resnet18(
                             dataloader,
                             checkpoint_dir=run_dir,
@@ -300,6 +302,8 @@ if __name__ == "__main__":
                     else:
                         logger.info("[SKIP] Test evaluation already exists")
 
+                logger.info(f"Evaluation complete for run{run_number} with "
+                      f"{real_count} real and {synthetic_count} synthetic images.")
                 # ---- Log dependent-variable metrics to results.json ----
                 results_logger.log_run(
                     run_number, real_count, synthetic_count,

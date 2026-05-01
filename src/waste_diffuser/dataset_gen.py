@@ -2,11 +2,14 @@
 import argparse
 import torch
 from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
+# Add the project root to sys.path to allow imports from src/   
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from src.waste_diffuser.pipeline import Pipeline
 from src.SDEdit.sdedit import SDEdit_gen_dataset
 from src.testing.compute_fid import compute_fid
-import sys
-from pathlib import Path
 import json
 import os
 from PIL import Image

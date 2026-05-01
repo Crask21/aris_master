@@ -96,6 +96,12 @@ class ResNet18Test:
         # Resume from checkpoint
         self.resume_from_checkpoint(resume_checkpoint_path)
         
+        # Create a separate CUDA stream for data transfers to enable overlapping
+        if torch.cuda.is_available():
+            self.transfer_stream = torch.cuda.Stream(device=self.device)
+        else:
+            self.transfer_stream = None
+        
         
         
     def setup_scheduler(self):
@@ -231,8 +237,9 @@ class ResNet18Test:
         val_loss = float("inf")
         
         # Timing configuration
-        log_timing = True  # Enable timing for every epoch to find bottlenecks
-        
+        # Enable log_timing if logger is in debug mode or if you want detailed timing breakdowns for each epoch to identify bottlenecks. This will add some overhead due to more frequent time measurements and logging, but can be invaluable for performance tuning.
+        log_timing = logger.isEnabledFor(logging.DEBUG)
+                
         # Print total number of parameters in the model
         total_params = sum(p.numel() for p in self.model.parameters())
         logger.info(f"Total parameters in ResNet18: {total_params}")
@@ -267,11 +274,17 @@ class ResNet18Test:
                 labels = batch["class"]
                 inputs = batch["image"]
                 
-                # Time: Host->Device transfer
+                # Time: Host->Device transfer (queued on transfer stream for overlap)
                 t_transfer_start = time.perf_counter()
-                inputs = inputs.to(self.device, non_blocking=True)
-                labels = labels.to(self.device, non_blocking=True)
-                torch.cuda.synchronize(self.device)  # Include GPU sync overhead in measurement
+                if self.transfer_stream is not None:
+                    with torch.cuda.stream(self.transfer_stream):
+                        inputs = inputs.to(self.device, non_blocking=True)
+                        labels = labels.to(self.device, non_blocking=True)
+                    # Ensure default stream waits for transfer completion without a full device sync.
+                    torch.cuda.current_stream(self.device).wait_stream(self.transfer_stream)
+                else:
+                    inputs = inputs.to(self.device, non_blocking=True)
+                    labels = labels.to(self.device, non_blocking=True)
                 time_data_transfer += time.perf_counter() - t_transfer_start
                 
                 # Time: Batch mixing (mixup/cutmix)
@@ -311,11 +324,12 @@ class ResNet18Test:
                     correct_b = predicted.eq(labels_b).sum().float()
                     correct_accumulator += lam * correct_a + (1.0 - lam) * correct_b
                 time_metrics += time.perf_counter() - t_metrics_start
+                
+                
 
                 end_of_step_time = time.perf_counter()
             
             # === Single GPU-to-CPU transfer at end of epoch ===
-            torch.cuda.synchronize(self.device)  # Ensure all GPU ops are complete
             running_loss = loss_accumulator.item()
             train_correct = correct_accumulator.item()
 
@@ -451,7 +465,9 @@ class ResNet18Test:
             
             # -------------------------- Estimate remaining time ------------------------- #
             elapsed_time = time.time() - start_time
-            avg_time_per_epoch = elapsed_time / (epoch + 1)
+            # When resuming from a checkpoint, use epochs completed in this run.
+            completed_epochs = (epoch - self.start_epoch + 1)
+            avg_time_per_epoch = elapsed_time / max(1, completed_epochs)
             remaining_time = avg_time_per_epoch * (self.num_epochs - epoch - 1)
             # remaining time in hh:mm:ss format
             remaining_time_hms = time.strftime("%H:%M:%S", time.gmtime(remaining_time))
