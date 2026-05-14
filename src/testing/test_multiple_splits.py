@@ -36,7 +36,7 @@ def has_test_split(config):
 
 
 
-def plan_pending_runs(config, runs_dir):
+def plan_pending_runs(config, runs_dir, results_logger=None):
     """
     Build a list of ALL expected runs from the config, check the filesystem
     state of each, and return only the ones that still need work.
@@ -71,6 +71,20 @@ def plan_pending_runs(config, runs_dir):
             final_ckpts = list(run_dir.glob("resnet18_final_*.ckpt"))
             eval_summary_val = run_dir / "evaluation" / "evaluation_summary_val.json"
             eval_summary_test = run_dir / "evaluation" / "evaluation_summary_test.json"
+            val_evaluation_current = (
+                results_logger.summary_is_current_for_logging(
+                    eval_summary_val, run_dir, "val"
+                )
+                if results_logger is not None
+                else eval_summary_val.exists()
+            )
+            test_evaluation_current = (
+                results_logger.summary_is_current_for_logging(
+                    eval_summary_test, run_dir, "test"
+                )
+                if results_logger is not None
+                else eval_summary_test.exists()
+            )
 
             if latest_ckpt.exists():
                 # resnet18_latest.ckpt is renamed to resnet18_final_* when
@@ -84,17 +98,17 @@ def plan_pending_runs(config, runs_dir):
                                      resume_checkpoint=str(latest_ckpt)))
 
             elif final_ckpts and (
-                not eval_summary_val.exists()
-                or (expect_test_evaluation and not eval_summary_test.exists())
+                not val_evaluation_current
+                or (expect_test_evaluation and not test_evaluation_current)
             ):
                 # Training finished (final checkpoint exists) but evaluation
-                # was not completed.
-                logger.info(f"[EVAL]   {run_name} — training complete, evaluation missing")
+                # was not completed for the configured checkpoint/metrics.
+                logger.info(f"[EVAL]   {run_name} — training complete, evaluation needs refresh")
                 pending.append(_task(real_count, synthetic_count, run_number,
                                      run_dir, action="evaluate"))
 
-            elif eval_summary_val.exists() and (
-                not expect_test_evaluation or eval_summary_test.exists()
+            elif val_evaluation_current and (
+                not expect_test_evaluation or test_evaluation_current
             ):
                 # Fully done — nothing to do.
                 logger.info(f"[DONE]   {run_name}")
@@ -193,7 +207,7 @@ if __name__ == "__main__":
     results_logger = ResultsLogger(config)
 
     # ---- Plan work: figure out what's already done vs. what's pending ----
-    pending_tasks = plan_pending_runs(config, runs_dir)
+    pending_tasks = plan_pending_runs(config, runs_dir, results_logger)
     has_test_split_available = has_test_split(config)
 
     if not pending_tasks:
@@ -280,27 +294,34 @@ if __name__ == "__main__":
                 val_summary_path = eval_dir / "evaluation_summary_val.json"
                 test_summary_path = eval_dir / "evaluation_summary_test.json"
 
-                if not val_summary_path.exists():
+                checkpoint_preference = config["logging"]["save_only"]
+                logger.info(f"Evaluating using checkpoint preference: {checkpoint_preference}")
+
+                if not results_logger.summary_is_current_for_logging(
+                    val_summary_path, run_dir, "val"
+                ):
                     evaluate_resnet18(
                         dataloader,
                         checkpoint_dir=run_dir,
-                        best_checkpoint="lowest_val_loss",
+                        best_checkpoint=checkpoint_preference,
                         split_name="val",
                     )
                 else:
-                    logger.info("[SKIP] Validation evaluation already exists")
+                    logger.info("[SKIP] Validation evaluation already exists for selected checkpoint")
                 
                 if has_test_split_available:
-                    if not test_summary_path.exists():
+                    if not results_logger.summary_is_current_for_logging(
+                        test_summary_path, run_dir, "test"
+                    ):
                         logger.info("Test split detected, running test evaluation…")
                         evaluate_resnet18(
                             dataloader,
                             checkpoint_dir=run_dir,
-                            best_checkpoint="lowest_val_loss",
+                            best_checkpoint=checkpoint_preference,
                             split_name="test",
                         )
                     else:
-                        logger.info("[SKIP] Test evaluation already exists")
+                        logger.info("[SKIP] Test evaluation already exists for selected checkpoint")
 
                 logger.info(f"Evaluation complete for run{run_number} with "
                       f"{real_count} real and {synthetic_count} synthetic images.")

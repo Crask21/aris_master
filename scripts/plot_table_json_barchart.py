@@ -25,6 +25,7 @@ from importlib import import_module
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import numpy as np
 
 
@@ -47,6 +48,66 @@ LATEX_VALUE_PATTERN = re.compile(
 def legend_is_off(table: dict) -> bool:
     value = table.get("legend")
     return isinstance(value, str) and value.strip().lower() == "off"
+
+
+def parse_bool(value: object, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"off", "false", "no", "0"}:
+            return False
+        if cleaned in {"on", "true", "yes", "1"}:
+            return True
+    return default
+
+
+def parse_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed):
+        return None
+    return parsed
+
+
+def normalize_bar_spacing(value: object) -> float:
+    parsed = parse_float(value)
+    if parsed is None:
+        return 0.0
+    return min(max(parsed, 0.0), 0.8)
+
+
+def normalize_bar_gap(value: object) -> float:
+    parsed = parse_float(value)
+    if parsed is None:
+        return 0.0
+    return min(max(parsed, 0.0), 2.0)
+
+
+def configure_cmu_serif_font(font_dir: Path) -> None:
+    if not font_dir.exists():
+        return
+
+    for font_path in font_dir.glob("*.ttf"):
+        font_manager.fontManager.addfont(str(font_path))
+
+    plt.rcParams.update(
+        {
+            "font.family": "CMU Serif",
+            "mathtext.fontset": "cm",
+            "mathtext.rm": "CMU Serif",
+            "mathtext.it": "CMU Serif:italic",
+            "mathtext.bf": "CMU Serif:bold",
+        }
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -452,6 +513,15 @@ def plot_customized_views(
     output_dir: Path | None,
     dpi: int,
     global_range: bool,
+    title_override: str | None,
+    xlabel_override: str | None,
+    ylabel_override: str | None,
+    show_baseline_line: bool,
+    title_font: float | None,
+    axis_title_font: float | None,
+    tick_font: float | None,
+    bar_spacing: float,
+    bar_gap: float,
 ) -> None:
     if not records:
         raise ValueError("No plottable records found for customized plotting.")
@@ -601,8 +671,10 @@ def plot_customized_views(
             if baseline_candidates:
                 baseline_by_x[str(x_value)] = baseline_candidates[0]
 
-        show_baseline_line = bool(baseline_by_x) and all(
-            str(x_value) in baseline_by_x for x_value in x_values
+        show_baseline_line = (
+            show_baseline_line
+            and bool(baseline_by_x)
+            and all(str(x_value) in baseline_by_x for x_value in x_values)
         )
 
         if show_baseline_line and group_dim == "ratio":
@@ -645,9 +717,11 @@ def plot_customized_views(
 
             current_group_width = min(0.85, 0.22 * max(1, len(present_groups)))
             current_bar_width = current_group_width / max(1, len(present_groups))
+            actual_bar_width = current_bar_width * (1.0 - bar_spacing)
+            bar_step = current_bar_width * (1.0 + bar_gap)
 
             for i, group_value in enumerate(present_groups):
-                offset = (i - (len(present_groups) - 1) / 2) * current_bar_width
+                offset = (i - (len(present_groups) - 1) / 2) * bar_step
                 y = float(values[group_value][xi])
                 yerr = float(errors[group_value][xi])
                 if not np.isfinite(yerr):
@@ -667,7 +741,7 @@ def plot_customized_views(
                 ax.bar(
                     x_center + offset,
                     y,
-                    width=current_bar_width,
+                    width=actual_bar_width,
                     yerr=yerr,
                     capsize=4,
                     label=label,
@@ -708,11 +782,17 @@ def plot_customized_views(
                 label="Baseline",
             )
 
-        ax.set_title(f"{labels[chart_dim]}: {chart_value} - {metric_ylabel(metric)}")
-        ax.set_xlabel(labels[x_dim])
-        ax.set_ylabel(metric_ylabel(metric))
+        title_text = (
+            title_override
+            if title_override is not None
+            else f"{labels[chart_dim]}: {chart_value} - {metric_ylabel(metric)}"
+        )
+        ax.set_title(title_text, fontsize=title_font)
+        ax.set_xlabel(xlabel_override or labels[x_dim], fontsize=axis_title_font)
+        ax.set_ylabel(ylabel_override or metric_ylabel(metric), fontsize=axis_title_font)
         ax.set_xticks(x_pos)
-        ax.set_xticklabels([str(item) for item in x_values])
+        ax.set_xticklabels([str(item) for item in x_values], fontsize=tick_font)
+        ax.tick_params(axis="y", labelsize=tick_font)
         # Keep the visual viewport limited to real plotted groups.
         ax.set_xlim(x_pos[0] - 0.5, x_pos[-1] + 0.5)
 
@@ -727,7 +807,12 @@ def plot_customized_views(
             if x_dim == "method":
                 show_legend = not bool(legend_off_by_method.get(str(only_value), False))
         if show_legend:
-            ax.legend(title=labels[group_dim], loc="best")
+            ax.legend(
+                title=labels[group_dim],
+                loc="best",
+                fontsize=tick_font,
+                title_fontsize=axis_title_font,
+            )
         fig.tight_layout()
 
         if output_dir is not None:
@@ -747,6 +832,14 @@ def plot_table(
     table_index: int,
     forced_group_field: str | None,
     global_range: bool,
+    title_override: str | None,
+    xlabel_override: str | None,
+    ylabel_override: str | None,
+    title_font: float | None,
+    axis_title_font: float | None,
+    tick_font: float | None,
+    bar_spacing: float,
+    bar_gap: float,
 ) -> None:
     rows = table.get("rows") or []
     if not rows:
@@ -791,9 +884,11 @@ def plot_table(
 
         current_group_width = min(0.85, 0.22 * max(1, len(present_methods)))
         current_bar_width = current_group_width / max(1, len(present_methods))
+        actual_bar_width = current_bar_width * (1.0 - bar_spacing)
+        bar_step = current_bar_width * (1.0 + bar_gap)
 
         for i, method in enumerate(present_methods):
-            offset = (i - (len(present_methods) - 1) / 2) * current_bar_width
+            offset = (i - (len(present_methods) - 1) / 2) * bar_step
             y = float(values[method][xi])
             yerr = float(errors[method][xi])
             if not np.isfinite(yerr):
@@ -806,7 +901,7 @@ def plot_table(
             ax.bar(
                 x_center + offset,
                 y,
-                width=current_bar_width,
+                width=actual_bar_width,
                 yerr=yerr,
                 capsize=4,
                 label=label,
@@ -821,21 +916,31 @@ def plot_table(
     metric = table.get("metric", "metric")
     headers = table.get("headers") or [prettify_label(group_field)]
 
-    title = f"{metric_ylabel(metric)} by {prettify_label(headers[0])}"
-    xlabel = headers[0] if headers else prettify_label(group_field)
-    ylabel = metric_ylabel(metric)
+    default_title = f"{metric_ylabel(metric)} by {prettify_label(headers[0])}"
+    default_xlabel = headers[0] if headers else prettify_label(group_field)
+    default_ylabel = metric_ylabel(metric)
 
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    title = title_override or default_title
+    xlabel = xlabel_override or default_xlabel
+    ylabel = ylabel_override or default_ylabel
+
+    ax.set_title(title, fontsize=title_font)
+    ax.set_xlabel(xlabel, fontsize=axis_title_font)
+    ax.set_ylabel(ylabel, fontsize=axis_title_font)
     ax.set_xticks(x)
-    ax.set_xticklabels(x_labels)
+    ax.set_xticklabels(x_labels, fontsize=tick_font)
+    ax.tick_params(axis="y", labelsize=tick_font)
 
     apply_tight_ylim(ax, values, errors, global_range)
 
     ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.5)
     if not legend_is_off(table):
-        ax.legend(title="Method", loc="best")
+        ax.legend(
+            title="Method",
+            loc="best",
+            fontsize=tick_font,
+            title_fontsize=axis_title_font,
+        )
 
     fig.tight_layout()
 
@@ -850,8 +955,21 @@ def plot_table(
 def main() -> None:
     args = parse_args()
 
+    font_dir = Path(__file__).resolve().parents[1] / "figures" / "font"
+    configure_cmu_serif_font(font_dir)
+
     with args.json_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
+
+    payload_title = payload.get("title")
+    payload_xlabel = payload.get("xlabel")
+    payload_ylabel = payload.get("ylabel")
+    payload_baseline_line = payload.get("baseline_line")
+    payload_title_font = parse_float(payload.get("title_font"))
+    payload_axis_title_font = parse_float(payload.get("axis_title_font"))
+    payload_tick_font = parse_float(payload.get("tick_font"))
+    payload_bar_spacing = normalize_bar_spacing(payload.get("bar_spacing"))
+    payload_bar_gap = normalize_bar_gap(payload.get("bar_gap"))
 
     tables = payload.get("tables")
     if not isinstance(tables, list) or not tables:
@@ -872,6 +990,26 @@ def main() -> None:
             selected_tables=selected,
             forced_group_field=args.group_field,
         )
+
+        table_override = selected[0][1] if len(selected) == 1 else {}
+        title_override = table_override.get("title") or payload_title
+        xlabel_override = table_override.get("xlabel") or payload_xlabel
+        ylabel_override = table_override.get("ylabel") or payload_ylabel
+        show_baseline_line = parse_bool(
+            table_override.get("baseline_line", payload_baseline_line),
+            default=True,
+        )
+        title_font = parse_float(table_override.get("title_font")) or payload_title_font
+        axis_title_font = (
+            parse_float(table_override.get("axis_title_font"))
+            or payload_axis_title_font
+        )
+        tick_font = parse_float(table_override.get("tick_font")) or payload_tick_font
+        bar_spacing = normalize_bar_spacing(
+            table_override.get("bar_spacing", payload_bar_spacing)
+        )
+        bar_gap = normalize_bar_gap(table_override.get("bar_gap", payload_bar_gap))
+
         plot_customized_views(
             records=records,
             metadata=metadata,
@@ -881,9 +1019,30 @@ def main() -> None:
             output_dir=args.output_dir,
             dpi=args.dpi,
             global_range=args.global_range,
+            title_override=title_override,
+            xlabel_override=xlabel_override,
+            ylabel_override=ylabel_override,
+            show_baseline_line=show_baseline_line,
+            title_font=title_font,
+            axis_title_font=axis_title_font,
+            tick_font=tick_font,
+            bar_spacing=bar_spacing,
+            bar_gap=bar_gap,
         )
     else:
         for idx, table in selected:
+            title_override = table.get("title") or payload_title
+            xlabel_override = table.get("xlabel") or payload_xlabel
+            ylabel_override = table.get("ylabel") or payload_ylabel
+            title_font = parse_float(table.get("title_font")) or payload_title_font
+            axis_title_font = (
+                parse_float(table.get("axis_title_font")) or payload_axis_title_font
+            )
+            tick_font = parse_float(table.get("tick_font")) or payload_tick_font
+            bar_spacing = normalize_bar_spacing(
+                table.get("bar_spacing", payload_bar_spacing)
+            )
+            bar_gap = normalize_bar_gap(table.get("bar_gap", payload_bar_gap))
             plot_table(
                 table=table,
                 output_dir=args.output_dir,
@@ -891,6 +1050,14 @@ def main() -> None:
                 table_index=idx,
                 forced_group_field=args.group_field,
                 global_range=args.global_range,
+                title_override=title_override,
+                xlabel_override=xlabel_override,
+                ylabel_override=ylabel_override,
+                title_font=title_font,
+                axis_title_font=axis_title_font,
+                tick_font=tick_font,
+                bar_spacing=bar_spacing,
+                bar_gap=bar_gap,
             )
 
     plt.show()

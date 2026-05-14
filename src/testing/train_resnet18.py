@@ -11,6 +11,12 @@ import torch.nn.functional as F
 from torchvision.models import ResNet18_Weights
 import torchvision
 import torchvision.transforms as transforms
+from sklearn.metrics import (
+    confusion_matrix,
+    classification_report,
+    accuracy_score,
+    precision_recall_fscore_support
+)
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -186,9 +192,6 @@ class ResNet18Test:
         self.checkpointing_steps = self.config["logging"].get("checkpointing_steps", 5)
         resume_from_checkpoint = self.config["logging"].get("resume_from_checkpoint", True)
         checkpoint_dir = self.config["logging"].get("checkpoint_dir", None)
-        # Metric used to choose the "best" checkpoint: 'val_acc' (default) or 'f1'
-        self.checkpoint_metric = self.config["logging"].get("checkpoint_metric", "val_acc")
-        
         if resume_checkpoint_path is not None:
             checkpoint_dir = resume_checkpoint_path
         logger.debug(f"Resume from checkpoint: {resume_from_checkpoint}, checkpoint dir: {checkpoint_dir}")
@@ -429,19 +432,8 @@ class ResNet18Test:
             if len(preds_list) > 0:
                 preds_all = np.concatenate(preds_list)
                 labels_all = np.concatenate(labels_list)
-                num_classes = self.num_classes
-                eps = 1e-8
-                tp = np.zeros(num_classes, dtype=np.int64)
-                pred_counts = np.zeros(num_classes, dtype=np.int64)
-                true_counts = np.zeros(num_classes, dtype=np.int64)
-                for c in range(num_classes):
-                    tp[c] = int(((preds_all == c) & (labels_all == c)).sum())
-                    pred_counts[c] = int((preds_all == c).sum())
-                    true_counts[c] = int((labels_all == c).sum())
-                precision = tp / (pred_counts + eps)
-                recall = tp / (true_counts + eps)
-                f1_per_class = 2 * precision * recall / (precision + recall + eps)
-                val_f1 = float(np.mean(f1_per_class))
+                
+                _, _, val_f1, _ = precision_recall_fscore_support(labels_all, preds_all, average="macro", zero_division=0)
             else:
                 val_f1 = 0.0
 
@@ -472,18 +464,12 @@ class ResNet18Test:
                 output_checkpoint_path = os.path.join(self.output_dir, output_name)
                 torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
                 logging.info(f"New best val acc: {self.best_val_acc:.2f}%. Model checkpoint saved: {output_checkpoint_path}")
-            # Optionally save checkpoint based on highest F1 instead of val_acc
-            if getattr(self, "checkpoint_metric", "val_acc") == "f1":
-                # val_f1 should be defined for this epoch
-                try:
-                    if val_f1 > self.best_f1:
-                        self.best_f1 = val_f1
-                        output_name = f"resnet18_best_val_f1.ckpt"
-                        output_checkpoint_path = os.path.join(self.output_dir, output_name)
-                        torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
-                        logging.info(f"New best val F1: {self.best_f1:.4f}. Model checkpoint saved: {output_checkpoint_path}")
-                except NameError:
-                    pass
+            if val_f1 > self.best_f1:
+                self.best_f1 = val_f1
+                output_name = f"resnet18_best_val_f1_macro.ckpt"
+                output_checkpoint_path = os.path.join(self.output_dir, output_name)
+                torch.save(self._checkpoint_payload(epoch), output_checkpoint_path)
+                logging.info(f"New best val macro F1: {self.best_f1:.4f}. Model checkpoint saved: {output_checkpoint_path}")
                 
             if val_loss < self.lowest_val_loss:
                 self.lowest_val_loss = val_loss
@@ -531,6 +517,8 @@ class ResNet18Test:
         return model
         
     def load_data(self, resnet_dataloader: ResNetDataloader = None):
+        #Print config path
+        print(f"Loading data with config: {self.config_path}")
         self.waste_dataloader = resnet_dataloader if resnet_dataloader is not None else ResNetDataloader(self.config_path)
         self.train_loader = self.waste_dataloader.train_loader
         self.val_loader = self.waste_dataloader.val_loader
@@ -545,8 +533,8 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--config", default="src/testing/testing_config.json", help="Path to config file")
     parser.add_argument("--evaluate", action="store_true", help="Run evaluation on test/validation set after training")
-    # arg = ["--config", "src/testing/testing_config.json", "--evaluate"]
-    args = parser.parse_args()
+    arg = ["--config", "/home/ap/cloud/master/aris_master/queue/scheduled/1_priority/05-14T14-18_Diff-Mix_1000_real_test.json", "--evaluate"]
+    args = parser.parse_args(arg)
     config_path = args.config
     resnet_trainer = ResNet18Test(config_path)
     resnet_trainer.train()
@@ -570,8 +558,3 @@ if __name__ == "__main__":
             sys.exit(1)
     elif args.evaluate:
         logger.warning("Evaluation not available, evaluate_resnet18 could not be imported")
-
-    
-    
-    
-    

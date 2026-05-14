@@ -138,6 +138,9 @@ def evaluate_model(model, dataloader, device, class_names):
     precision, recall, f1, support = precision_recall_fscore_support(
         all_labels, all_predictions, average='weighted'
     )
+    _, _, f1_macro, _ = precision_recall_fscore_support(
+        all_labels, all_predictions, average='macro', zero_division=0
+    )
 
     # Per-class accuracy
     per_class_accuracy = {}
@@ -159,6 +162,7 @@ def evaluate_model(model, dataloader, device, class_names):
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "f1_macro": f1_macro,
         "class_names": class_names,
         "per_class_accuracy": per_class_accuracy,
     }
@@ -168,6 +172,7 @@ def evaluate_model(model, dataloader, device, class_names):
     logger.info(f"  Precision: {precision:.4f}")
     logger.info(f"  Recall:    {recall:.4f}")
     logger.info(f"  F1 Score:  {f1:.4f}")
+    logger.info(f"  F1 Macro:  {f1_macro:.4f}")
     for cls_name, cls_acc in per_class_accuracy.items():
         if cls_acc is not None:
             logger.info(f"  {cls_name}: {cls_acc*100:.2f}%")
@@ -371,6 +376,7 @@ def evaluate_resnet18_from_config(config_path: str, checkpoint_path=None, output
         "precision": float(results["precision"]),
         "recall": float(results["recall"]),
         "f1_score": float(results["f1"]),
+        "f1_macro": float(results["f1_macro"]),
         "per_class_accuracy": results["per_class_accuracy"],
         "classification_report": classification_report_dict
     }
@@ -408,12 +414,27 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
             raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_dir}")
         
         if best_checkpoint is not None:
-            if best_checkpoint not in ["lowest_val_loss", "highest_val_acc"] and not isinstance(best_checkpoint, int):
-                raise ValueError(f"Invalid best_checkpoint value: {best_checkpoint}. Must be 'lowest_val_loss', 'highest_val_acc', or an integer epoch number.")
+            checkpoint_names = [
+                "lowest_val_loss",
+                "highest_val_acc",
+                "val_acc",
+                "f1_macro",
+                "val_f1_macro",
+                "best_val_f1_macro",
+            ]
+            if best_checkpoint not in checkpoint_names and not isinstance(best_checkpoint, int):
+                raise ValueError(
+                    f"Invalid best_checkpoint value: {best_checkpoint}. "
+                    f"Must be one of {checkpoint_names}, or an integer epoch number."
+                )
             elif best_checkpoint == "lowest_val_loss":
                 checkpoint_path = Path(checkpoint_dir) / "resnet18_lowest_val_loss.ckpt"
-            elif best_checkpoint == "highest_val_acc":
+            elif best_checkpoint == "highest_val_acc" or best_checkpoint == "val_acc":
                 checkpoint_path = Path(checkpoint_dir) / "resnet18_best_val_acc.ckpt"
+                logger.info(f"Using checkpoint with highest validation accuracy: {checkpoint_path}")
+            elif best_checkpoint in ["f1_macro", "val_f1_macro", "best_val_f1_macro"]:
+                checkpoint_path = Path(checkpoint_dir) / "resnet18_best_val_f1_macro.ckpt"
+                logger.info(f"Using checkpoint with best macro F1 score: {checkpoint_path}")
             else:
                 checkpoint_path = Path(checkpoint_dir) / f"resnet18_epoch_{best_checkpoint}.ckpt"
         else:
@@ -469,6 +490,7 @@ def evaluate_resnet18(dataloader: ResNetDataloader, checkpoint_dir, best_checkpo
         "precision": float(results["precision"]),
         "recall": float(results["recall"]),
         "f1_score": float(results["f1"]),
+        "f1_macro": float(results["f1_macro"]),
         "per_class_accuracy": results["per_class_accuracy"],
     }
     

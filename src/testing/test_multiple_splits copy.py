@@ -238,10 +238,12 @@ if __name__ == "__main__":
                     synthetic_image_count=synthetic_count,
                     preview=args.verbose
                 )
+                checkpoint_preference = config["logging"]["save_only"]
+                logger.info(f"Evaluating using checkpoint preference: {checkpoint_preference}")
                 evaluate_resnet18(
                     dataloader,
                     checkpoint_dir=run_dir,
-                    best_checkpoint="lowest_val_loss",
+                    best_checkpoint=checkpoint_preference,
                 )
 
                 # ---- Log dependent-variable metrics to results.json ----

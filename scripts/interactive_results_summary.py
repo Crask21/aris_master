@@ -29,6 +29,7 @@ ALLOWED_METRICS = [
     "val_f1_score",
     "test_accuracy",
     "test_f1_score",
+    "test_f1_macro",
 ]
 
 REAL_IMAGES_PER_CLASS_DIVISOR = 4
@@ -517,7 +518,7 @@ def get_expansion_selectable_split_choices(
     for split_name, (real_count, synthetic_count, ratio) in ordered:
         label = (
             f"{split_name}  [real={real_count}, synthetic={synthetic_count}, "
-            f"x({format_compact_number(ratio)}+1)]"
+            f"{format_expansion_ratio_text(ratio)}]"
         )
         choices.append((label, split_name))
 
@@ -1233,6 +1234,22 @@ def format_compact_number(value: float) -> str:
     return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
+def _is_zero_ratio(value: float) -> bool:
+    return math.isclose(value, 0.0, abs_tol=1e-9)
+
+
+def format_expansion_ratio_text(ratio: float) -> str:
+    if _is_zero_ratio(ratio):
+        return "x1"
+    return f"x({format_compact_number(ratio)}+1)"
+
+
+def format_expansion_ratio_latex(ratio: float) -> str:
+    if _is_zero_ratio(ratio):
+        return r"$\\times 1$"
+    return f"$\\times({format_compact_number(ratio)}+1)$"
+
+
 def format_real_images_display(real_image_count: int) -> str:
     per_class = real_image_count / REAL_IMAGES_PER_CLASS_DIVISOR
     if per_class.is_integer():
@@ -1289,7 +1306,7 @@ def render_expansion_ratio_latex_table(
 
     header_ratio_cells = ["1"]
     header_ratio_cells.extend(
-        f"\\textbf{{$\\times({format_compact_number(ratio)}+1)$}}"
+        f"\\textbf{{{format_expansion_ratio_latex(ratio)}}}"
         for ratio in ratio_columns
     )
     header_ratio_line = " & " + " & ".join(header_ratio_cells) + r" \\" 
@@ -1493,51 +1510,34 @@ def print_expansion_ratio_report(
     ]
 
     real_counts = sorted({real_count for _, real_count, _, _ in split_info})
-    ratio_columns = sorted({ratio for _, _, _, ratio in split_info if ratio > 0})
-    zero_ratio_present = any(ratio == 0 for _, _, _, ratio in split_info)
-    zero_synthetic_mode = not ratio_columns and zero_ratio_present
+    ratio_columns = sorted({ratio for _, _, _, ratio in split_info if ratio >= 0})
 
     if not real_counts:
         raise ValueError("No valid real_image_count values were found for expansion ratio tables.")
 
-    if not ratio_columns and not zero_synthetic_mode:
+    if not ratio_columns:
         raise ValueError(
-            "No positive expansion ratios were found. Select at least one split with synthetic_image_count > 0."
+            "No expansion ratios were found. Select at least one split with synthetic_image_count >= 0."
         )
 
     split_names_by_real_ratio: dict[tuple[int, float], list[str]] = {}
-    split_names_by_real_zero: dict[int, list[str]] = {}
     for split_name, real_count, _, ratio in sorted(split_info, key=lambda x: (x[1], x[3], x[0])):
-        if ratio > 0:
-            key = (real_count, ratio)
-            split_names_by_real_ratio.setdefault(key, []).append(split_name)
+        if ratio < 0:
             continue
+        key = (real_count, ratio)
+        split_names_by_real_ratio.setdefault(key, []).append(split_name)
 
-        if zero_synthetic_mode and ratio == 0:
-            split_names_by_real_zero.setdefault(real_count, []).append(split_name)
-
-    if zero_synthetic_mode:
-        duplicates_zero = {
-            real_count: names
-            for real_count, names in split_names_by_real_zero.items()
-            if len(names) > 1
-        }
-        if duplicates_zero:
-            print("% [WARN] Multiple split_name values found for same real count in zero-synthetic mode:")
-            for real_count, split_names in sorted(duplicates_zero.items(), key=lambda item: item[0]):
-                print("% " f"real={real_count} -> {split_names}")
-    else:
-        duplicates = {
-            key: names for key, names in split_names_by_real_ratio.items() if len(names) > 1
-        }
-        if duplicates:
-            print("% [WARN] Multiple split_name values found for same real count and expansion ratio:")
-            for (real_count, ratio), split_names in sorted(duplicates.items(), key=lambda item: (item[0][0], item[0][1])):
-                print(
-                    "% "
-                    f"real={real_count}, ratio={format_compact_number(ratio)} "
-                    f"-> {split_names}"
-                )
+    duplicates = {
+        key: names for key, names in split_names_by_real_ratio.items() if len(names) > 1
+    }
+    if duplicates:
+        print("% [WARN] Multiple split_name values found for same real count and expansion ratio:")
+        for (real_count, ratio), split_names in sorted(duplicates.items(), key=lambda item: (item[0][0], item[0][1])):
+            print(
+                "% "
+                f"real={real_count}, ratio={format_compact_number(ratio)} "
+                f"-> {split_names}"
+            )
 
     method_groups: dict[str, list[ResultFile]] = {}
     for item in selected_results:
@@ -1581,95 +1581,6 @@ def print_expansion_ratio_report(
             baseline_by_real_count[real_count] = (
                 uncertainty(baseline_values, error_mode) if baseline_values else (math.nan, math.nan)
             )
-
-        if zero_synthetic_mode:
-            method_names = list(method_groups.keys())
-            method_values_by_name: dict[str, dict[int, tuple[float, float]]] = {}
-
-            for method_name, method_items in method_groups.items():
-                method_values_by_real_count: dict[int, tuple[float, float]] = {}
-
-                for real_count in real_counts:
-                    candidate_splits = split_names_by_real_zero.get(real_count, [])
-
-                    found_value = False
-                    for split_name in candidate_splits:
-                        sample_limit: int | None = None
-                        if not use_all_samples:
-                            sample_limit = sample_limits.get((split_name, metric), 0)
-
-                        for item in method_items:
-                            vals = metric_values_for_split(item, split_name, metric, sample_limit=sample_limit)
-                            if vals:
-                                method_values_by_real_count[real_count] = uncertainty(vals, error_mode)
-                                found_value = True
-                                break
-
-                        if found_value:
-                            break
-
-                    if not found_value:
-                        method_values_by_real_count[real_count] = (math.nan, math.nan)
-
-                method_values_by_name[method_name] = method_values_by_real_count
-
-            if to_latex:
-                table = render_zero_synthetic_expansion_latex_table(
-                    metric=metric,
-                    real_counts=real_counts,
-                    method_names=method_names,
-                    baseline_by_real_count=baseline_by_real_count,
-                    method_values_by_name=method_values_by_name,
-                )
-                print("\n" + table)
-            else:
-                headers = ["Real Images", "Baseline"] + method_names
-                rows: list[list[str]] = []
-
-                for real_count in real_counts:
-                    row_cells = [format_real_images_display(real_count)]
-                    baseline_mean, baseline_err = baseline_by_real_count.get(real_count, (math.nan, math.nan))
-                    row_cells.append(format_plain_percent_with_uncertainty(baseline_mean, baseline_err))
-                    for method_name in method_names:
-                        method_mean, method_err = method_values_by_name.get(method_name, {}).get(
-                            real_count,
-                            (math.nan, math.nan),
-                        )
-                        row_cells.append(format_plain_percent_with_uncertainty(method_mean, method_err))
-                    rows.append(row_cells)
-
-                print(f"\nMetric: {metric}")
-                print(tabulate(rows, headers=headers, tablefmt="github"))
-
-            exported_rows: list[dict] = []
-            for real_count in real_counts:
-                baseline_mean, baseline_err = baseline_by_real_count.get(real_count, (math.nan, math.nan))
-                methods: dict[str, str] = {}
-                for method_name in method_names:
-                    method_mean, method_err = method_values_by_name.get(method_name, {}).get(
-                        real_count,
-                        (math.nan, math.nan),
-                    )
-                    methods[method_name] = format_plain_percent_with_uncertainty(method_mean, method_err)
-
-                exported_rows.append(
-                    {
-                        "real_images": format_real_images_display(real_count),
-                        "baseline": format_plain_percent_with_uncertainty(baseline_mean, baseline_err),
-                        "methods": methods,
-                    }
-                )
-
-            exported_tables.append(
-                {
-                    "mode": "expansion_ratio_zero_synthetic",
-                    "metric": metric,
-                    "headers": ["Real Images", "Baseline"] + method_names,
-                    "rows": exported_rows,
-                }
-            )
-
-            continue
 
         for method_name, method_items in method_groups.items():
             method_values: dict[tuple[int, float], tuple[float, float]] = {}
@@ -1715,7 +1626,7 @@ def print_expansion_ratio_report(
                 # Baseline column header
                 headers.append("Baseline")
                 # Ratio columns
-                headers.extend([f"x({format_compact_number(r)}+1)" for r in ratio_columns])
+                headers.extend([format_expansion_ratio_text(r) for r in ratio_columns])
 
                 rows: list[list[str]] = []
                 for real_count in real_counts:
@@ -1736,7 +1647,7 @@ def print_expansion_ratio_report(
                 ratio_values: dict[str, str] = {}
                 for ratio in ratio_columns:
                     value_mean, value_err = method_values.get((real_count, ratio), (math.nan, math.nan))
-                    ratio_values[f"x({format_compact_number(ratio)}+1)"] = format_plain_percent_with_uncertainty(
+                    ratio_values[format_expansion_ratio_text(ratio)] = format_plain_percent_with_uncertainty(
                         value_mean,
                         value_err,
                     )
@@ -1755,7 +1666,7 @@ def print_expansion_ratio_report(
                     "metric": metric,
                     "method_name": method_name,
                     "headers": ["Real Images", "Baseline"]
-                    + [f"x({format_compact_number(r)}+1)" for r in ratio_columns],
+                    + [format_expansion_ratio_text(r) for r in ratio_columns],
                     "rows": exported_rows,
                 }
             )

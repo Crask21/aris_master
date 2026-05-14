@@ -76,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         help="Overwrite generated file if it already exists.",
     )
     parser.add_argument(
+        "--update_image_counts",
+        action="store_true",
+        help="Update the real_image_counts and synthetic_image_counts in evaluation.splits based on the find/replace ratios.",
+    )
+    parser.add_argument(
         "--dry_run",
         action="store_true",
         help="Preview output without writing files.",
@@ -243,6 +248,7 @@ def build_rerun_command(
     output_dir: Path | None,
     overwrite: bool,
     dry_run: bool,
+    update_image_counts: bool,
 ) -> str:
     parts: list[str] = [
         "python3",
@@ -255,7 +261,7 @@ def build_rerun_command(
     parts.extend(["--find", shlex.quote(find_text), "--replace"])
     parts.extend(shlex.quote(value) for value in replace_values)
 
-    if change_filename:
+    if not change_filename:
         parts.append("--change_filename")
     if output_dir is not None:
         parts.extend(["--output_dir", shlex.quote(str(output_dir))])
@@ -263,6 +269,8 @@ def build_rerun_command(
         parts.append("--overwrite")
     if dry_run:
         parts.append("--dry_run")
+    if update_image_counts:
+        parts.append("--update_image_counts")
 
     return " ".join(parts)
 
@@ -310,14 +318,39 @@ def main() -> int:
 
         for raw_path, keys in resolved_change_paths:
             original_value = get_nested(data_variant, keys)
-            if not isinstance(original_value, str):
+            
+            if isinstance(original_value, str):
+                new_value = original_value.replace(find_text, replacement)
+            elif isinstance(original_value, (int, float)) and not isinstance(original_value, bool):
+                str_val = str(original_value)
+                new_str_val = str_val.replace(find_text, replacement)
+                try:
+                    new_value = type(original_value)(new_str_val)
+                except ValueError:
+                    new_value = new_str_val  # Fallback
+            else:
                 joined = ".".join(keys)
                 raise TypeError(
-                    f"Field '{raw_path}' (resolved to '{joined}') is not a string: "
+                    f"Field '{raw_path}' (resolved to '{joined}') has an unsupported type: "
                     f"{type(original_value).__name__}"
                 )
-            new_value = original_value.replace(find_text, replacement)
+                
             set_nested(data_variant, keys, new_value)
+            
+        if args.update_image_counts:
+            try:
+                old_val = float(find_text)
+                new_val = float(replacement)
+                ratio = new_val / old_val
+
+                for count_key in ["real_image_counts", "synthetic_image_counts"]:
+                    path = ["evaluation", "splits", count_key]
+                    if path_exists(data_variant, path):
+                        old_counts = get_nested(data_variant, path)
+                        new_counts = [int(round(c * ratio)) for c in old_counts]
+                        set_nested(data_variant, path, new_counts)
+            except ValueError:
+                print(f"Warning: Could not parse find_text '{find_text}' or replacement '{replacement}' to float for image counts update.")
 
         output_name = build_output_filename(
             template_path=args.template,
@@ -353,6 +386,7 @@ def main() -> int:
         output_dir=args.output_dir,
         overwrite=args.overwrite,
         dry_run=args.dry_run,
+        update_image_counts=args.update_image_counts,
     )
     print("\nRe-run command (non-interactive):")
     print(rerun_command)

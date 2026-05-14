@@ -22,8 +22,26 @@ class ResultsLogger:
         # Legacy, unprefixed metric names map to values in val summary.
         "accuracy": "accuracy",
         "f1_score": "f1_score",
+        "f1_macro": "f1_macro",
         "precision": "precision",
         "recall": "recall",
+    }
+
+    _ALWAYS_TRACKED_F1_METRICS = [
+        "val_f1_score",
+        "test_f1_score",
+        "val_f1_macro",
+        "test_f1_macro",
+    ]
+
+    _CHECKPOINT_FILES = {
+        "lowest_val_loss": "resnet18_lowest_val_loss.ckpt",
+        "val_loss": "resnet18_lowest_val_loss.ckpt",
+        "highest_val_acc": "resnet18_best_val_acc.ckpt",
+        "val_acc": "resnet18_best_val_acc.ckpt",
+        "f1_macro": "resnet18_best_val_f1_macro.ckpt",
+        "val_f1_macro": "resnet18_best_val_f1_macro.ckpt",
+        "best_val_f1_macro": "resnet18_best_val_f1_macro.ckpt",
     }
 
     def __init__(self, config, output_dir=None):
@@ -49,9 +67,11 @@ class ResultsLogger:
         
         if isinstance(self.dependent_variables, str):
             self.dependent_variables = [self.dependent_variables]
+        self._ensure_always_tracked_f1_metrics()
 
         # Load or initialise results
         self.results = self._load_or_init_results()
+        self._ensure_results_metric_list()
 
         # Pre-populate split entries
         self._prepopulate_splits()
@@ -81,6 +101,78 @@ class ResultsLogger:
         if not isinstance(s, str):
             return str(s)
         return s.rsplit(".", 1)[-1].replace("_", " ").title()
+
+    def _ensure_always_tracked_f1_metrics(self):
+        """Always track weighted and macro F1 for validation and test."""
+        for metric in self._ALWAYS_TRACKED_F1_METRICS:
+            if metric not in self.dependent_variables:
+                self.dependent_variables.append(metric)
+
+    def _ensure_results_metric_list(self):
+        """Keep existing results.json metric metadata in sync with logging."""
+        metrics = self.results.setdefault("metrics", [])
+        for metric in self.dependent_variables:
+            if metric not in metrics:
+                metrics.append(metric)
+
+    @staticmethod
+    def _get_summary_metric(summary, key, dep_var=None):
+        """Resolve a metric from an evaluation summary, including fallbacks."""
+        value = summary.get(key)
+        if value is None and dep_var:
+            value = summary.get(dep_var)
+        if value is None and key == "f1_macro":
+            report = summary.get("classification_report", {})
+            macro_avg = report.get("macro avg", {})
+            value = macro_avg.get("f1-score")
+        return value
+
+    @classmethod
+    def resolve_checkpoint_path(cls, run_dir, checkpoint_preference):
+        """Return the checkpoint path for a logging/evaluation preference."""
+        if isinstance(checkpoint_preference, int):
+            return Path(run_dir) / f"resnet18_epoch_{checkpoint_preference}.ckpt"
+
+        checkpoint_name = cls._CHECKPOINT_FILES.get(checkpoint_preference)
+        if checkpoint_name is None:
+            raise ValueError(
+                f"Invalid checkpoint preference '{checkpoint_preference}'. "
+                "Expected one of: "
+                f"{', '.join(sorted(cls._CHECKPOINT_FILES))}, or an epoch number."
+            )
+        return Path(run_dir) / checkpoint_name
+
+    def expected_checkpoint_path(self, run_dir):
+        """Return the configured checkpoint path for this run."""
+        checkpoint_preference = self.config.get("logging", {}).get(
+            "save_only", "lowest_val_loss"
+        )
+        return self.resolve_checkpoint_path(run_dir, checkpoint_preference)
+
+    def summary_is_current_for_logging(self, summary_path, run_dir, split_name):
+        """Return True when a summary can be reused for current logging."""
+        summary_path = Path(summary_path)
+        if not summary_path.exists():
+            return False
+
+        with open(summary_path, "r") as f:
+            summary = json.load(f)
+
+        expected_checkpoint = self.expected_checkpoint_path(run_dir)
+        summary_checkpoint = summary.get("checkpoint")
+        if summary_checkpoint is None:
+            return False
+
+        if (Path(summary_checkpoint).resolve(strict=False)
+                != expected_checkpoint.resolve(strict=False)):
+            return False
+
+        for metric in (f"{split_name}_f1_score", f"{split_name}_f1_macro"):
+            key = metric[len(f"{split_name}_"):]
+            if self._get_summary_metric(summary, key, metric) is None:
+                return False
+
+        return True
 
     # ------------------------------------------------------------------ #
     #  Independent-variable helpers                                       #
@@ -242,9 +334,7 @@ class ResultsLogger:
                                 float(min(val_losses)), 6)
             elif dep_var.startswith("val_"):
                 key = dep_var[len("val_"):]
-                value = val_summary.get(key)
-                if value is None and dep_var in val_summary:
-                    value = val_summary[dep_var]
+                value = self._get_summary_metric(val_summary, key, dep_var)
                 if value is None:
                     logger.warning(f"[WARNING] Metric '{dep_var}' was requested "
                                   f"but not found in val summary")
@@ -253,9 +343,7 @@ class ResultsLogger:
 
             elif dep_var.startswith("test_"):
                 key = dep_var[len("test_"):]
-                value = test_summary.get(key)
-                if value is None and dep_var in test_summary:
-                    value = test_summary[dep_var]
+                value = self._get_summary_metric(test_summary, key, dep_var)
                 if value is None:
                     logger.warning(f"[WARNING] Metric '{dep_var}' was requested "
                                   f"but not found in test summary")
@@ -283,7 +371,9 @@ class ResultsLogger:
     # ------------------------------------------------------------------ #
     #  High-level run logging                                             #
     # ------------------------------------------------------------------ #
-
+ #Aris_4_class: 719364
+ #deep ensembles: 653200
+ # real dataset = 7 * 14330 = 100310
     def log_run(self, run_number, real_count, synthetic_count,
                 val_summary_path, test_summary_path=None,
                 model_instance=None, run_dir=None):
@@ -302,7 +392,9 @@ class ResultsLogger:
             seed = model_instance.seed
         elif run_dir is not None:
             # Try to read seed from checkpoint
-            ckpt_path = (Path(run_dir) / "resnet18_lowest_val_loss.ckpt")
+            ckpt_path = self.expected_checkpoint_path(run_dir)
+            if not ckpt_path.exists():
+                ckpt_path = (Path(run_dir) / "resnet18_lowest_val_loss.ckpt")
             if ckpt_path.exists():
                 try:
                     ckpt = torch.load(str(ckpt_path),
