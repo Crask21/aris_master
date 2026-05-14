@@ -350,8 +350,8 @@ class ResNetDataloader(dataloaderInterface):
     def val_augmentations(self):
             # Preprocessing the datasets and DataLoaders creation.
         spatial_augmentations = [
-            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
+            transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR) if self.resolution else transforms.Lambda(lambda x: x),
+            transforms.CenterCrop(self.resolution) if self.resolution else transforms.Lambda(lambda x: x),
         ]
 
         augmentations = transforms.Compose(
@@ -474,7 +474,8 @@ class ResNetDataloader(dataloaderInterface):
         self.val_loader = torch.utils.data.DataLoader(val_dataset, **val_loader_kwargs)
         self.test_loader = torch.utils.data.DataLoader(test_dataset, **val_loader_kwargs) if use_test_split else None
         
-        self.preview_dataloader(self.train_loader, show=self.preview)
+        if self.preview:
+            self.preview_dataloader(self.train_loader, show=True)
             
         return self.train_loader
 

@@ -226,6 +226,35 @@ class ResNet18Test:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
         logger.info(f"Set all random seeds to {seed}")
+
+    def _validate_targets(self, labels: torch.Tensor, outputs: torch.Tensor, context: str) -> torch.Tensor:
+        """Validate target tensor before CrossEntropyLoss to avoid opaque CUDA asserts."""
+        if labels.dtype != torch.long:
+            labels = labels.long()
+
+        if outputs.ndim != 2:
+            raise ValueError(
+                f"Expected model outputs to have shape [N, C], got {tuple(outputs.shape)} ({context})."
+            )
+
+        n_classes = int(outputs.size(1))
+        if n_classes <= 0:
+            raise ValueError(f"Invalid number of classes in model output: {n_classes} ({context}).")
+
+        if labels.numel() == 0:
+            raise ValueError(f"Received empty target tensor ({context}).")
+
+        min_label = int(labels.min().detach().cpu().item())
+        max_label = int(labels.max().detach().cpu().item())
+        if min_label < 0 or max_label >= n_classes:
+            unique_labels = sorted(int(v) for v in torch.unique(labels.detach().cpu()).tolist())
+            raise ValueError(
+                "Target index out of range for CrossEntropyLoss "
+                f"({context}): min={min_label}, max={max_label}, n_classes={n_classes}, "
+                f"unique_labels={unique_labels}, class_names={self.class_names}"
+            )
+
+        return labels
         
     def train(self):
         # Set the random seed before training
@@ -297,6 +326,17 @@ class ResNet18Test:
                 self.optimizer.zero_grad()
                 outputs = self.model(mixed_inputs)
                 time_forward += time.perf_counter() - t_forward_start
+
+                labels_a = self._validate_targets(
+                    labels_a,
+                    outputs,
+                    context=f"train epoch={epoch + 1} batch={batch_idx} labels_a",
+                )
+                labels_b = self._validate_targets(
+                    labels_b,
+                    outputs,
+                    context=f"train epoch={epoch + 1} batch={batch_idx} labels_b",
+                )
                 
                 # Time: Loss computation and backward pass
                 t_backward_start = time.perf_counter()
@@ -367,6 +407,11 @@ class ResNet18Test:
                     labels = labels.to(self.device, non_blocking=True)
                     
                     outputs = self.model(inputs)
+                    labels = self._validate_targets(
+                        labels,
+                        outputs,
+                        context=f"val epoch={epoch + 1}",
+                    )
                     loss = self.criterion(outputs, labels)
                     val_loss_sum += loss.item() * inputs.size(0)
                     _, predicted = outputs.max(1)
