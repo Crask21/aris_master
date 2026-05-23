@@ -27,7 +27,7 @@ class dataloaderInterface:
                  resolution: int = None, 
                  center_crop: bool = None, 
                  random_flip: bool = None, 
-                 preview: bool = True, 
+                 preview: bool = False, 
                  batch_size: int = None, 
                  num_workers: int = None,
                  synthetic: bool = False,

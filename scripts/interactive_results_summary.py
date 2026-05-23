@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from statistics import fmean, pstdev
+from statistics import fmean, pstdev, stdev
 from typing import Iterable
 from scipy.stats import t
 import numpy as np
@@ -27,12 +27,26 @@ import numpy as np
 ALLOWED_METRICS = [
     "val_accuracy",
     "val_f1_score",
+    "val_f1_macro",
     "test_accuracy",
     "test_f1_score",
     "test_f1_macro",
 ]
 
 REAL_IMAGES_PER_CLASS_DIVISOR = 4
+
+EXPORT_PLOT_DEFAULTS = {
+    "baseline_line": True,
+    "title": "Method Comparision",
+    "xlabel": "Methods",
+    "ylabel": "Test F1 Macro (%)",
+    "bar_spacing": 0,
+    "bar_gap": 0.25,
+    "title_font": 18,
+    "axis_title_font": 17,
+    "tick_font": 15,
+    "legend_outside": True,
+}
 
 
 @dataclass
@@ -552,7 +566,7 @@ def prompt_for_expansion_split_names(
 
 
 def method_name_for_expansion(evaluation_id: str) -> str:
-    match = re.search(r"_\d+_real_(.+)$", evaluation_id)
+    match = re.search(r"(?:^|_)\d+_real_(.+)$", evaluation_id)
     if match and match.group(1).strip():
         return match.group(1).strip()
     return evaluation_id
@@ -1126,7 +1140,7 @@ def uncertainty(values: Iterable[float], mode: str) -> tuple[float, float]:
     if len(vals) == 1:
         return (mean_val, 0.0)
 
-    std = pstdev(vals)
+    std = stdev(vals)
     if mode == "std":
         return (mean_val, std)
 
@@ -2009,6 +2023,7 @@ def main() -> None:
                 "to_latex": args.to_latex,
                 "error_mode": args.error,
                 "rerun_command": rerun_command,
+                "plot_defaults": EXPORT_PLOT_DEFAULTS,
                 "selected_evaluation_ids": [item.evaluation_id for item in selected_results],
                 "baseline_evaluation_ids": baseline_ids_for_command,
                 "selected_splits": selected_splits,
@@ -2101,6 +2116,7 @@ def main() -> None:
             "to_latex": args.to_latex,
             "error_mode": args.error,
             "rerun_command": rerun_command,
+            "plot_defaults": EXPORT_PLOT_DEFAULTS,
             "selected_evaluation_ids": [item.evaluation_id for item in selected_results],
             "baseline_evaluation_ids": [baseline_result.evaluation_id],
             "selected_splits": selected_splits,

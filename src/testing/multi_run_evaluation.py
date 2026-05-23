@@ -2,11 +2,14 @@
 # from seaborn.objects import Path
 import json
 import sys
+import os
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
 import numpy as np
+import matplotlib.font_manager as font_manager
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-import os
 # Import parser args
 from argparse import ArgumentParser
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -14,6 +17,61 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from src.utils.add_note import add_note
 import logging
 logger = logging.getLogger(__name__)
+
+
+MEAN_CM_DISPLAY_LABELS = {
+    "impregnated_wood": "Impregnated Wood",
+    "normal_wood": "Normal Wood",
+    "soft_plastic": "Soft Plastic",
+    "hard_plastic": "Hard Plastic",
+}
+MEAN_CM_FONT_PATH = Path("figures/font/cmunrm.ttf")
+MEAN_CM_FIGSIZE = (10.0, 8.0)
+MEAN_CM_DPI = 300
+MEAN_CM_CMAP = "Blues"
+MEAN_CM_TITLE_FONT_SIZE = 20
+MEAN_CM_AXIS_LABEL_FONT_SIZE = 20
+MEAN_CM_TICK_FONT_SIZE = 17
+MEAN_CM_ANNOT_FONT_SIZE = 17
+MEAN_CM_COLORBAR_FONT_SIZE = 17
+MEAN_CM_PERCENT_DECIMALS = 2
+MEAN_CM_COUNT_DECIMALS = 1
+_MEAN_CM_FONT_CONFIGURED = False
+
+
+def _repo_root():
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _configure_mean_cm_font():
+    """Use CMU Serif for mean confusion matrix plots when available."""
+    global _MEAN_CM_FONT_CONFIGURED
+    if _MEAN_CM_FONT_CONFIGURED:
+        return
+
+    font_path = MEAN_CM_FONT_PATH
+    if not font_path.is_absolute():
+        font_path = _repo_root() / font_path
+
+    if not font_path.exists():
+        logger.warning(f"Mean confusion matrix font not found: {font_path}")
+        _MEAN_CM_FONT_CONFIGURED = True
+        return
+
+    font_manager.fontManager.addfont(str(font_path))
+    font_name = font_manager.FontProperties(fname=str(font_path)).get_name()
+    plt.rcParams.update(
+        {
+            "font.family": font_name,
+            "font.serif": [font_name],
+            "axes.unicode_minus": False,
+        }
+    )
+    _MEAN_CM_FONT_CONFIGURED = True
+
+
+def _display_class_names(class_names):
+    return [MEAN_CM_DISPLAY_LABELS.get(class_name, class_name) for class_name in class_names]
 
 
 def _extract_class_names_from_report(classification_report):
@@ -97,30 +155,46 @@ def _plot_mean_confusion_matrix(mean_cm_counts, mean_cm_normalized, class_names,
 
     if not class_names or len(class_names) != mean_cm_normalized.shape[0]:
         class_names = [str(i) for i in range(mean_cm_normalized.shape[0])]
+    class_names = _display_class_names(class_names)
+    _configure_mean_cm_font()
 
     annot = np.empty(mean_cm_normalized.shape, dtype=object)
     for i in range(mean_cm_normalized.shape[0]):
         for j in range(mean_cm_normalized.shape[1]):
-            annot[i, j] = f"{mean_cm_normalized[i, j] * 100:.1f}%\n({mean_cm_counts[i, j]:.1f})"
+            annot[i, j] = (
+                f"{mean_cm_normalized[i, j] * 100:.{MEAN_CM_PERCENT_DECIMALS}f}%\n"
+                f"({mean_cm_counts[i, j]:.{MEAN_CM_COUNT_DECIMALS}f})"
+            )
 
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(
+    fig, ax = plt.subplots(figsize=MEAN_CM_FIGSIZE)
+    heatmap = sns.heatmap(
         mean_cm_normalized,
         annot=annot,
+        annot_kws={"fontsize": MEAN_CM_ANNOT_FONT_SIZE},
         fmt="",
-        cmap="Blues",
+        cmap=MEAN_CM_CMAP,
         vmin=0.0,
         vmax=1.0,
+        square=True,
+        linewidths=0.5,
+        linecolor="white",
         xticklabels=class_names,
         yticklabels=class_names,
-        cbar_kws={"label": "Row-normalized percentage"}
+        ax=ax,
     )
-    plt.title(title)
-    plt.ylabel("True Label")
-    plt.xlabel("Predicted Label")
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
+    ax.set_title(title, fontsize=MEAN_CM_TITLE_FONT_SIZE, pad=16)
+    ax.set_ylabel("True Label", fontsize=MEAN_CM_AXIS_LABEL_FONT_SIZE, labelpad=10)
+    ax.set_xlabel("Predicted Label", fontsize=MEAN_CM_AXIS_LABEL_FONT_SIZE, labelpad=10)
+    ax.tick_params(axis="both", labelsize=MEAN_CM_TICK_FONT_SIZE)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=35, ha="right")
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+
+    colorbar = heatmap.collections[0].colorbar
+    colorbar.ax.tick_params(labelsize=MEAN_CM_COLORBAR_FONT_SIZE)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=MEAN_CM_DPI, bbox_inches="tight")
+    plt.close(fig)
 
 
 def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_factor=False, only_show_mean=False, splits=None):
@@ -274,7 +348,7 @@ def multi_run_evaluation(resnet18_runs_dir, output_dir=None, synthetic_real_fact
                 np.save(cm_counts_save_path, mean_cm_counts)
                 np.save(cm_percent_save_path, mean_cm_normalized)
 
-                cm_plot_path = output_dir / f"mean_confusion_matrix_{split_name}_{evaluation_split}.png"
+                cm_plot_path = output_dir / f"mean_confusion_matrix_{split_name}_{evaluation_split}.pdf"
                 _plot_mean_confusion_matrix(
                     mean_cm_counts=mean_cm_counts,
                     mean_cm_normalized=mean_cm_normalized,

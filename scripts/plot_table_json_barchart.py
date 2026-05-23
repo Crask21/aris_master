@@ -50,6 +50,15 @@ def legend_is_off(table: dict) -> bool:
     return isinstance(value, str) and value.strip().lower() == "off"
 
 
+def legend_is_outside(table: dict, payload_value: object) -> bool:
+    value = table.get("legend")
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"outside", "out"}:
+            return True
+    return parse_bool(payload_value, default=False)
+
+
 def parse_bool(value: object, default: bool = True) -> bool:
     if value is None:
         return default
@@ -141,7 +150,14 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=None,
-        help="Optional directory to save PNG files. If omitted, figures are not saved.",
+        help="Optional directory to save PDF files. If omitted, figures are not saved.",
+    )
+    parser.add_argument(
+        "--format",
+        dest="output_format",
+        choices=["pdf", "png"],
+        default="pdf",
+        help="File format for saved figures (pdf or png).",
     )
     parser.add_argument(
         "--dpi",
@@ -511,12 +527,14 @@ def plot_customized_views(
     x_dim: str,
     group_dim: str,
     output_dir: Path | None,
+    output_format: str,
     dpi: int,
     global_range: bool,
     title_override: str | None,
     xlabel_override: str | None,
     ylabel_override: str | None,
     show_baseline_line: bool,
+    legend_outside: bool,
     title_font: float | None,
     axis_title_font: float | None,
     tick_font: float | None,
@@ -807,19 +825,29 @@ def plot_customized_views(
             if x_dim == "method":
                 show_legend = not bool(legend_off_by_method.get(str(only_value), False))
         if show_legend:
-            ax.legend(
-                title=labels[group_dim],
-                loc="best",
-                fontsize=tick_font,
-                title_fontsize=axis_title_font,
-            )
+            if legend_outside:
+                ax.legend(
+                    title=labels[group_dim],
+                    loc="center left",
+                    bbox_to_anchor=(1.02, 0.5),
+                    fontsize=tick_font,
+                    title_fontsize=axis_title_font,
+                    frameon=True,
+                )
+            else:
+                ax.legend(
+                    title=labels[group_dim],
+                    loc="best",
+                    fontsize=tick_font,
+                    title_fontsize=axis_title_font,
+                )
         fig.tight_layout()
 
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
             filename = sanitize_filename(
                 f"custom_{chart_dim}_{chart_value}_{x_dim}_vs_{group_dim}_{metric}"
-            ) + ".png"
+            ) + f".{output_format}"
             output_path = output_dir / filename
             fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
             print(f"Saved figure: {output_path}")
@@ -828,6 +856,7 @@ def plot_customized_views(
 def plot_table(
     table: dict,
     output_dir: Path | None,
+    output_format: str,
     dpi: int,
     table_index: int,
     forced_group_field: str | None,
@@ -835,6 +864,7 @@ def plot_table(
     title_override: str | None,
     xlabel_override: str | None,
     ylabel_override: str | None,
+    legend_outside: bool,
     title_font: float | None,
     axis_title_font: float | None,
     tick_font: float | None,
@@ -935,18 +965,28 @@ def plot_table(
 
     ax.grid(axis="y", linestyle="--", linewidth=0.6, alpha=0.5)
     if not legend_is_off(table):
-        ax.legend(
-            title="Method",
-            loc="best",
-            fontsize=tick_font,
-            title_fontsize=axis_title_font,
-        )
+        if legend_outside:
+            ax.legend(
+                title="Method",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                fontsize=tick_font,
+                title_fontsize=axis_title_font,
+                frameon=True,
+            )
+        else:
+            ax.legend(
+                title="Method",
+                loc="best",
+                fontsize=tick_font,
+                title_fontsize=axis_title_font,
+            )
 
     fig.tight_layout()
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        filename = sanitize_filename(f"table_{table_index}_{mode}_{metric}") + ".png"
+        filename = sanitize_filename(f"table_{table_index}_{mode}_{metric}") + f".{output_format}"
         output_path = output_dir / filename
         fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
         print(f"Saved figure: {output_path}")
@@ -965,6 +1005,7 @@ def main() -> None:
     payload_xlabel = payload.get("xlabel")
     payload_ylabel = payload.get("ylabel")
     payload_baseline_line = payload.get("baseline_line")
+    payload_legend_outside = payload.get("legend_outside")
     payload_title_font = parse_float(payload.get("title_font"))
     payload_axis_title_font = parse_float(payload.get("axis_title_font"))
     payload_tick_font = parse_float(payload.get("tick_font"))
@@ -999,6 +1040,7 @@ def main() -> None:
             table_override.get("baseline_line", payload_baseline_line),
             default=True,
         )
+        legend_outside = legend_is_outside(table_override, payload_legend_outside)
         title_font = parse_float(table_override.get("title_font")) or payload_title_font
         axis_title_font = (
             parse_float(table_override.get("axis_title_font"))
@@ -1017,12 +1059,14 @@ def main() -> None:
             x_dim=x_dim,
             group_dim=group_dim,
             output_dir=args.output_dir,
+            output_format=args.output_format,
             dpi=args.dpi,
             global_range=args.global_range,
             title_override=title_override,
             xlabel_override=xlabel_override,
             ylabel_override=ylabel_override,
             show_baseline_line=show_baseline_line,
+            legend_outside=legend_outside,
             title_font=title_font,
             axis_title_font=axis_title_font,
             tick_font=tick_font,
@@ -1034,6 +1078,7 @@ def main() -> None:
             title_override = table.get("title") or payload_title
             xlabel_override = table.get("xlabel") or payload_xlabel
             ylabel_override = table.get("ylabel") or payload_ylabel
+            legend_outside = legend_is_outside(table, payload_legend_outside)
             title_font = parse_float(table.get("title_font")) or payload_title_font
             axis_title_font = (
                 parse_float(table.get("axis_title_font")) or payload_axis_title_font
@@ -1046,6 +1091,7 @@ def main() -> None:
             plot_table(
                 table=table,
                 output_dir=args.output_dir,
+                output_format=args.output_format,
                 dpi=args.dpi,
                 table_index=idx,
                 forced_group_field=args.group_field,
@@ -1053,6 +1099,7 @@ def main() -> None:
                 title_override=title_override,
                 xlabel_override=xlabel_override,
                 ylabel_override=ylabel_override,
+                legend_outside=legend_outside,
                 title_font=title_font,
                 axis_title_font=axis_title_font,
                 tick_font=tick_font,
