@@ -19,7 +19,6 @@ def main(resolution=128, dataset_dir="/media/aris/Data/master2025dev/datasets/wo
     # Rotate the images 90 degrees clockwise and convert to tensor
     transform = transforms.Compose([
         transforms.Resize((resolution, resolution)),
-        transforms.Lambda(lambda img: img.rotate(-90)),
         transforms.ToTensor(),
         transforms.Normalize([0.5], [0.5]),
     ])

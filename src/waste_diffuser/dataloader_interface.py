@@ -3,6 +3,7 @@
 # ---------------------------------------------------------------------------- #
 import json
 import os
+from time import time
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ except ImportError:
     from src.waste_diffuser.augmentations import build_image_augmentations
 logger = logging.getLogger(__name__)
 from src.utils.add_note import add_note
+from src.waste_diffuser.RandomHorizontalFlip import RandomHorizontalFlip
 # ---------------------------------------------------------------------------- #
 #                                     Class                                    #
 # ---------------------------------------------------------------------------- #
@@ -33,6 +35,21 @@ class dataloaderInterface:
                  synthetic: bool = False,
                  vae_latents: bool = None,
                  data_file: str = None):
+        """_summary_
+
+        Args:
+            config (str): Config path for the dataloader interface. Generally used for training.
+            output_dir (str, optional): output dir for information logging. Defaults to None.
+            resolution (int, optional): _description_. Defaults to None.
+            center_crop (bool, optional): _description_. Defaults to None.
+            random_flip (bool, optional): _description_. Defaults to None.
+            preview (bool, optional): _description_. Defaults to True.
+            batch_size (int, optional): _description_. Defaults to None.
+            num_workers (int, optional): _description_. Defaults to None.
+            synthetic (bool, optional): _description_. Defaults to False.
+            vae_latents (bool, optional): _description_. Defaults to None.
+            data_file (str, optional): _description_. Defaults to None.
+        """
         
         self.config_path = config
         self.output_dir = output_dir
@@ -63,12 +80,14 @@ class dataloaderInterface:
             self.batch_size = self.config["hyperparameters"]["batch_size"]
         if num_workers is None:
             self.num_workers = self.config["hyperparameters"]["dataloader_num_workers"]
+        self.requires_annots = self.config.get("data", {}).get("requires_annots", False)  # Default to False if not specified in config
+        self.load_annots_content = self.config.get("data", {}).get("load_annots_content", False)
         # Check if vae
         if vae_latents is None:
-            self.vae_latents = self.config["vae"]["use_vae"]  # Default to False if not specified in config
+            self.vae_latents = self.config.get("vae", {}).get("use_vae", False)  # Default to False if not specified in config
         
         # limit the number of images per class if max_images_per_class is specified in the config file
-        self.max_images_per_class = self.data_config["max_images_per_class"]
+        self.max_images_per_class = self.data_config.get("max_images_per_class", 10000)
             
         # Set classes and number of classes from config file
         self.classes = list(self.data_config["classes"].keys())
@@ -86,8 +105,6 @@ class dataloaderInterface:
         if self.random_flip is None:
             self.random_flip = self.data_config["random_flip"]
             
-        
-
         self.dataloader = self.get_dataloader()
         
         
@@ -108,6 +125,7 @@ class dataloaderInterface:
         """
         
         data_dict = []
+        annot_warning = False
         
         
         for category, details in self.data_config["classes"].items():
@@ -158,7 +176,16 @@ class dataloaderInterface:
                         for file in files:
                             if file.endswith(".png"):
                                 image_file = os.path.join(root, file)
-                                sample = {"filepath": image_file, "class": category, "split": split}
+                                if self.requires_annots:
+                                    mask_file = image_file.replace("images", "masks").replace("img", "mask").replace(".png", ".pt")
+                                    if not os.path.exists(mask_file):# and split == "train":
+                                        if not annot_warning:
+                                            logger.warning(f"Annotation file does not exist for image: {image_file}. Skipping.")
+                                            annot_warning = True
+                                        continue
+                                    sample = {"filepath": image_file, "mask": mask_file, "class": category, "split": split}
+                                else:
+                                    sample = {"filepath": image_file, "class": category, "split": split}
                                 data_dict.append(sample) 
                                 image_count += 1
                             if self.max_images_per_class is not None and image_count >= self.max_images_per_class:
@@ -175,12 +202,44 @@ class dataloaderInterface:
 # ------------- Transform images using the defined augmentations ------------- #
     def transform_images(self, examples):
         processed = []
-        for filepath in examples["filepath"]:
-            # Import as image using PIL
+        processed_masks = []
+        
+        for idx, filepath in enumerate(examples["filepath"]):
+            flip = RandomHorizontalFlip(p=0.5) if self.random_flip else transforms.Lambda(lambda x: x)
+            # Import and augment image
             image = Image.open(filepath)
-            processed.append(self.augmentations(image.convert("RGB")))
+            image_rgb = image.convert("RGB")
+            image_rgb = flip(image_rgb)
+            
+            # Apply spatial augmentations to image
+            image_augmented = self.spatial_augmentations(image_rgb)
+            # Apply pixel-level augmentations (ToTensor, Normalize) to image only
+            image_final = self.pixel_augmentations(image_augmented)
+            processed.append(image_final)
+            
+            # If masks are present, augment them the same way (spatial only, no normalization)
+            if self.requires_annots and "mask" in examples:
+                mask_path = examples["mask"][idx]
+                try:
+                    mask_tensor = torch.load(mask_path)
+                    # mask_pil = Image.fromarray((mask_tensor.cpu().numpy() * 255).astype(np.uint8), mode="L")
+                    # mask_augmented = self.spatial_augmentations(mask_pil)
+                    # mask_final = torch.from_numpy(np.array(mask_augmented, dtype=np.uint8)).float() / 255.0
+                    mask = flip(mask_tensor) if self.random_flip else mask_tensor
+                    
+
+                    processed_masks.append(mask)
+                except Exception as e:
+                    logger.warning(f"Failed to load or augment mask {mask_path}: {e}")
+                    processed_masks.append(None)
+        
         class_indices = [self.class_LUT[cls] for cls in examples["class"]]
-        return {"image": processed, "class": class_indices}
+        output = {"image": processed, "class": class_indices}
+        
+        if self.requires_annots and len(processed_masks) > 0:
+            output["masks"] = processed_masks
+
+        return output
     
     def load_latent(self, examples):
         latents = []
@@ -188,7 +247,10 @@ class dataloaderInterface:
             latent = torch.load(filepath)
             latents.append(latent)
         class_indices = [self.class_LUT[cls] for cls in examples["class"]]
-        return {"image": latents, "class": class_indices}
+        output = {"image": latents, "class": class_indices}
+        if self.requires_annots and "mask" in examples:
+            output["masks"] = examples["masks"]
+        return output
     
 # ------------------------------ Get dataloader ------------------------------ #
     def get_dataloader(self, split="train"):
@@ -248,24 +310,24 @@ class dataloaderInterface:
             logger.info(f"Using image dataset with resolution {self.resolution} and augmentations: center_crop={self.center_crop}, random_flip={self.random_flip}")
             # --- Define augmentations --- #
             # Preprocessing the datasets and DataLoaders creation.
+            # NOTE: Spatial augmentations (resize, crop, flip) are applied to BOTH image and mask
+            # to ensure they remain synchronized. Pixel-level augmentations (ToTensor, Normalize)
+            # are only applied to the image.
             
-            
-            spatial_augmentations = [
+            self.spatial_augmentations = transforms.Compose([
                 transforms.Resize(self.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-                transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution),
-                transforms.RandomHorizontalFlip() if self.random_flip else transforms.Lambda(lambda x: x),
-            ]
-            self.augmentations = transforms.Compose(
-                spatial_augmentations
-                + [
-                    transforms.ToTensor(),
-                    transforms.Normalize([0.5], [0.5]),
-                ]
-            )
+                transforms.CenterCrop(self.resolution) if self.center_crop else transforms.RandomCrop(self.resolution)
+            ])
+            
+            self.pixel_augmentations = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ])
                     
             dataset.set_transform(self.transform_images)
             self.dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
-            self.preview_dataloader(self.dataloader, show=self.preview)
+            if self.preview:
+                self.preview_dataloader(self.dataloader, show=self.preview)
             self.print_dataset_summary(data_dict)
         else:
             logger.info(f"Using VAE latent dataset with resolution {self.resolution}")

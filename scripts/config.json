@@ -22,6 +22,7 @@
   "hyperparameters": {
     "batch_size": 16,
     "epochs": 1000,
+    "steps": null,
     "learning_rate": 0.00014,
     "dataloader_num_workers": 4
   },

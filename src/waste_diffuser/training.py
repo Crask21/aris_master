@@ -235,13 +235,27 @@ class training:
     
     def train(self):
         
+        #print total parameters for unet
+        total_params = sum(p.numel() for p in self.model.parameters())
+        print(f"Total parameters in UNet: {total_params}")
+
         start_time = time.time()
-        
         for epoch in range(self.first_epoch, self.config["hyperparameters"]["epochs"]):
             
             self.model.train()
             self.progress_bar = tqdm(total=self.num_update_steps_per_epoch)
             self.progress_bar.set_description(f"Epoch {epoch}")
+            
+            
+            total_epoch_time = time.time()
+            time_spent_loading = 0
+            time_spent_in_model = 0
+            time_spent_weight_update = 0
+            time_other = 0
+            time_save_checkpoint = 0
+            
+            tm = time.time()
+            
             for step, batch in enumerate(self.train_dataloader):
                 # Skip steps until we reach the resumed step
                 if self.config["logging"]["resume_from_checkpoint"] and epoch == self.first_epoch and step < self.resume_step:
@@ -249,10 +263,12 @@ class training:
                         self.progress_bar.update(1)
                     continue
                 
-                
                 class_labels = batch["class"]
                 class_labels = class_labels.to(self.accelerator.device)
                 clean_images = batch["image"].to(self.accelerator.device)
+                
+                time_spent_loading += time.time() - tm
+                tm = time.time()
                 # Sample noise that we'll add to the images
                 noise = torch.randn(clean_images.shape, dtype=self.weight_dtype, device=clean_images.device)
                 bsz = clean_images.shape[0]
@@ -270,9 +286,15 @@ class training:
                 
                 # ----------------------------- model predictions ---------------------------- #
                 with self.accelerator.accumulate(self.model):
+                    
+                    time_other += time.time() - tm
                     # Predict the noise residual
+                    tm = time.time()
                     model_output = self.model(noisy_images, timesteps, class_labels=class_labels).sample
+                    time_spent_in_model += time.time() - tm
+                    
 
+                    tm = time.time()
                     if self.config["diffusion_parameters"]["prediction_type"] == "epsilon":
                         loss = F.mse_loss(model_output.float(), noise.float())  # this could have different weights!
                     elif self.config["diffusion_parameters"]["prediction_type"] == "sample":
@@ -292,9 +314,15 @@ class training:
                     self.optimizer.step()
                     self.lr_scheduler.step()
                     self.optimizer.zero_grad()
+                    time_spent_weight_update += time.time() - tm
                     
                 # ------------------------------ SAVE CHECKPOINT ----------------------------- #
+                tm = time.time()
                 self.save_checkpoint(loss)
+                time_save_checkpoint += time.time() - tm
+
+                tm = time.time()
+            print(f"Epoch {epoch} finished in {time.time() - total_epoch_time:.2f} seconds. Time spent loading data: {time_spent_loading:.2f} seconds. Time spent in model: {time_spent_in_model:.2f} seconds. Time spent updating weights: {time_spent_weight_update:.2f} seconds. Time spent saving checkpoint: {time_save_checkpoint:.2f} seconds. Time spent on other tasks: {time_other:.2f} seconds.")
             self.progress_bar.close()
             
             # --------------- Generate sample images for visual inspection --------------- #
@@ -331,7 +359,7 @@ class training:
             avg_time_per_epoch = elapsed_time / (epoch + 1 - self.first_epoch)
             remaining_time = avg_time_per_epoch * (self.config["hyperparameters"]["epochs"] - epoch - 1)
             # remaining time in hh:mm:ss format
-            self.remaining_time_hms = time.strftime("%H:%M:%S", time.gmtime(remaining_time))
+            self.remaining_time_hms = time.strftime("%d days %H:%M:%S", time.gmtime(remaining_time))
             # Estimated time that the model is expected to finish training
             estimated_finish_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() + remaining_time))
             

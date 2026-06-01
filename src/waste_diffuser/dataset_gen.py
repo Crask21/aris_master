@@ -3,8 +3,12 @@ import argparse
 import torch
 from diffusers import UNet2DModel, AutoencoderKL, DDIMPipeline
 from src.waste_diffuser.pipeline import Pipeline
+from src.waste_diffuser.masked_pipeline import MaskedPipeline
+from src.waste_diffuser.dataloader_interface import dataloaderInterface
 from src.SDEdit.sdedit import SDEdit_gen_dataset
 from src.testing.compute_fid import compute_fid
+from src.waste_diffuser.MaskDataLoader import MaskDataLoader
+from torchvision import transforms
 import sys
 from pathlib import Path
 import json
@@ -66,6 +70,24 @@ def parse_args():
         default=0,
         help="Number of times to compute FID. If > 1, prints mean and std.",
     )
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="unconditional",
+        help="Generation method to use. Options: 'unconditional', 'conditional', 'masked', 'sdedit'"
+    )
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default="/media/aris/Data/master2025dev/datasets/aris_4_class/1000_real/segmentation_masks/1000_impregnated_wood_only/",
+        help="Path to the dataset of masks for masked generation (used when --method is 'masked')"
+    )
+    parser.add_argument(
+        "--classes",
+        nargs="+",
+        default=None,
+        help="List of class names (used for organizing output images into subfolders and for FID computation). If not provided, will attempt to extract from config file if available, otherwise will use generic class labels. Example: --classes 'impregnated_wood' 'normal_wood' 'hard_plastic' 'soft_plastic'"
+    )
     return parser.parse_args()
 
 class Dataset_gen:
@@ -97,6 +119,9 @@ class Dataset_gen:
         elif self.args.method == "conditional":
             print("Running conditional generation...")
             self.classic_diffusion()
+        elif self.args.method == "masked":
+            print("Running masked generation...")
+            self.generate_images_masked()
         elif self.args.method.lower() == "sdedit":
             print("Running SDEdit generation...")
             _class = self.config.get("class_label", 0)
@@ -117,6 +142,7 @@ class Dataset_gen:
                 strength=self.config.get("strength", 0.9),
                 class_label=class_label,
             )
+            
 
         if self.args.method == "conditional" and len(self.classes) == 1:
             self.args.output_dir = os.path.join(self.args.output_dir, self.classes[0],"images")
@@ -145,11 +171,11 @@ class Dataset_gen:
             print(f"FID results saved to {fid_results_path}")
 
 
-
     def classic_diffusion(self):
         pipeline = Pipeline.from_pretrained(self.args.model_dir)
         self.pipeline = pipeline.to("cuda")
         self.pipeline.unet.eval()
+    
         
         #Make sure output directory exists
         os.makedirs(self.args.output_dir, exist_ok=True)
@@ -231,7 +257,105 @@ class Dataset_gen:
                         image_png = Image.fromarray(image_png)
                         # Save image with ISO timestamp prefix
                         image_png.save(f"{output_dir_class}/{self.run_timestamp}_{(self.args.image_num - remaining) + j:04d}.png")
+    
+    def generate_images_masked(self):
+        print(self.args.dataset_path)
+        # print(self.config["resolution"])
+        print(self.args.batch_size)
+        maskDataloader = MaskDataLoader(dataset_path=self.args.dataset_path, classes=self.args.classes,batch_size=self.args.batch_size).get_dataloader()
+        transform = transforms.Compose([
+            transforms.RandomAffine(
+                degrees=15,
+                translate=(0.1, 0.1),
+                scale=(0.9, 1.1)
+            )
+        ])
+        
+        
+        self.pipeline = MaskedPipeline.from_pretrained(self.args.model_dir, vae_dir=self.args.vae_dir if self.args.vae else None).to("cuda")
+        self.pipeline.unet.eval()
+        
+        for class_label in range(self.pipeline.unet.config.num_class_embeds):
+            print(f"Generating images for class {class_label}...")
+            #Check amount of images already in output directory
+            if self.config is not None:
+                output_dir_class = os.path.join(self.args.output_dir, self.classes[class_label],"images")
+            else:
+                output_dir_class = os.path.join(self.args.output_dir, f"class_{class_label}", "images")
+            os.makedirs(output_dir_class, exist_ok=True)
+            mask_output_path = os.path.join(self.args.output_dir, f"class_{class_label}", "masks")
+            os.makedirs(mask_output_path, exist_ok=True)
+        
+        
+            existing_images = len([f for f in os.listdir(output_dir_class) if f.endswith(".png")])
+            print(f"Found {existing_images} existing images in directory {output_dir_class}.")
+            if existing_images >= self.args.image_num:
+                print(f"Already have {existing_images} images, which is >= requested {self.args.image_num}. Skipping generation.")
+                continue
+            else:
+                print(f"Generating {self.args.image_num - existing_images} new images...")
+                n_images_to_generate = self.args.image_num - existing_images
+                for i in range(n_images_to_generate//self.args.batch_size):
+                    print(f"Generating batch {i+1}/{n_images_to_generate//self.args.batch_size}..." )
+                    
+                    masks = next(iter(maskDataloader))["mask"].to("cuda")
+                    masks = transform(masks)
+                    print("Mask batch shape:", masks.shape)
+                    
+                    image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=self.args.batch_size, class_labels=torch.tensor([class_label]*self.args.batch_size).to("cuda"), masks=masks).images
+                    
+                    #Debug plot images:
+                    # self.plot_images(image, masks)
+                    
+                    
+                    # Save images to output directory
+                    for j, img in enumerate(image):
+                        # Image is a tensor, convert to PIL image before saving
+                        image_png = (img / 2 + 0.5).clamp(0, 1).cpu().permute(1, 2, 0).numpy()
+                        image_png = (image_png * 255).round().astype("uint8")
+                        image_png = Image.fromarray(image_png)
+                        # Save image with ISO timestamp prefix
+                        image_png.save(f"{output_dir_class}/{self.run_timestamp}_{i*self.args.batch_size + j:04d}.png")
+                        
+                        #Save masks
+                        mask_img = (masks[j].cpu().squeeze().numpy() * 255).astype("uint8")
+                        mask_img = Image.fromarray(mask_img)
+                        mask_img.save(f"{mask_output_path}/{self.run_timestamp}_{i*self.args.batch_size + j:04d}_class_{class_label}_mask.png")
+                        
+                        #img.save(f"{output_dir_class}/{i*self.args.batch_size + j:04d}.png")
                 
+                # Handle remaining images if image_num is not divisible by batch_size
+                remaining = n_images_to_generate % self.args.batch_size
+                if remaining > 0:
+                    print(f"Generating remaining {remaining} images...")
+                    image = self.pipeline(num_inference_steps=self.args.num_inference_steps, batch_size=remaining, class_labels=torch.tensor([class_label]*remaining).to("cuda"), masks=masks).images
+                    for j, img in enumerate(image):
+                        image_png = (img / 2 + 0.5).clamp(0, 1).cpu().permute(1, 2, 0).numpy()
+                        image_png = (image_png * 255).round().astype("uint8")
+                        image_png = Image.fromarray(image_png)
+                        # Save image with ISO timestamp prefix
+                        image_png.save(f"{output_dir_class}/{self.run_timestamp}_{(self.args.image_num - remaining) + j:04d}.png")
+                        # Save mask
+                        mask_img = (masks[j].cpu().squeeze().numpy() * 255).astype("uint8")
+                        mask_img = Image.fromarray(mask_img)
+                        mask_img.save(f"{mask_output_path}/{self.run_timestamp}_{(self.args.image_num - remaining) + j:04d}_class_{class_label}_mask.png")
+
+    
+    def plot_images(self, images, masks=None):
+        import matplotlib.pyplot as plt
+        batch_size = images.shape[0]
+        plt.figure(figsize=(15, 5))
+        for i in range(batch_size):
+            plt.subplot(2, batch_size, i+1)
+            img = (images[i].cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
+            plt.imshow(img)
+            plt.axis("off")
+            if masks is not None:
+                plt.subplot(2, batch_size, batch_size + i + 1)
+                mask_img = (masks[i].cpu().squeeze().numpy() * 255).astype("uint8")
+                plt.imshow(mask_img, cmap="gray")
+                plt.axis("off")
+        plt.show()                
 
 if __name__ == "__main__":
     # Check if parse_args are empty
@@ -240,8 +364,8 @@ if __name__ == "__main__":
         
         # Default arguments for testing
         sys.argv.extend([
-            "--model_dir", "/media/aris/Data/master2025dev/aris_master/training/02-03_impregnated-wood_128_2x-self-attention",
-            "--output_dir", "/media/aris/Data/master2025dev/datasets/synthetic/02-03_impregnated-wood_128_2x-self-attention",
+            "--model_dir", "/media/aris/Data/master2025dev/aris_master/training/03-27_4_class_default_conditioned",
+            "--output_dir", "/media/aris/Data/master2025dev/datasets/synthetic/03-27_4_class_default_conditioned",
             #"--vae",
             "--batch_size", "16",
             "--num_inference_steps", "50",

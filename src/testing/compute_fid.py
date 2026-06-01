@@ -26,7 +26,7 @@ def compute_fid(
     metrics = calculate_metrics(
         input1=str(fake_path),   # generated / synthetic
         input2=str(real_path),   # reference / real
-        cuda=cuda, 
+        cuda=cuda,
         fid=True,
         isc=False,
         kid=False,
@@ -46,7 +46,7 @@ def main():
     parser.add_argument("--real", type=str, required=True, help="Path to real images")
     parser.add_argument("--fake", type=str, required=True, help="Path to synthetic images")
     parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
-    parser.add_argument("--search_deep", action="store_true", help="Search for all images in subdirectories")
+    parser.add_argument("--search_local", action="store_false", help="Search for all images in subdirectories")
     parser.add_argument("--batch-size", type=int, default=64)
     args = parser.parse_args()
 
@@ -54,9 +54,8 @@ def main():
         real=args.real,
         fake=args.fake,
         cuda=args.cuda,
-        search_deep=args.search_deep,
+        search_deep=args.search_local,
         batch_size=args.batch_size,
-        compute_num=args.compute_num,
     )
 
 
