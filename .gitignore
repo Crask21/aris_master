@@ -2,6 +2,9 @@
 __pycache__/
 *.py[codz]
 *$py.class
+*training/
+queue/
+models/
 
 # C extensions
 *.so
