@@ -87,7 +87,7 @@ class dataloaderInterface:
             self.vae_latents = self.config.get("vae", {}).get("use_vae", False)  # Default to False if not specified in config
         
         # limit the number of images per class if max_images_per_class is specified in the config file
-        self.max_images_per_class = self.data_config.get("max_images_per_class", 10000)
+        self.max_images_per_class = self.data_config.get("max_images_per_class", 99999999999999)
             
         # Set classes and number of classes from config file
         self.classes = list(self.data_config["classes"].keys())

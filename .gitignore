@@ -1,5 +1,6 @@
 training/
 queue/
+Testing/
 #testing/
 test/
 GIF/
@@ -11,7 +12,8 @@ __pycache__/
 *$py.class
 models/
 queue/
-
+testing/*
+# testing/
 # C extensions
 *.so
 

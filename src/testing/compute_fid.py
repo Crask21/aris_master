@@ -1,5 +1,6 @@
 from pathlib import Path
 from torch_fidelity import calculate_metrics
+from tqdm import tqdm
 import argparse
 from statistics import mean, stdev
 from torch import manual_seed
@@ -45,16 +46,15 @@ def main():
     parser = argparse.ArgumentParser(description="Compute FID between real and synthetic image folders")
     parser.add_argument("--real", type=str, required=True, help="Path to real images")
     parser.add_argument("--fake", type=str, required=True, help="Path to synthetic images")
-    parser.add_argument("--cuda", action="store_true", help="Use CUDA if available")
-    parser.add_argument("--search_local", action="store_false", help="Search for all images in subdirectories")
+    parser.add_argument("--dont_search_deep", action="store_false", help="Search for all images in subdirectories")
     parser.add_argument("--batch-size", type=int, default=64)
     args = parser.parse_args()
 
     compute_fid(
         real=args.real,
         fake=args.fake,
-        cuda=args.cuda,
-        search_deep=args.search_local,
+        cuda=True,
+        search_deep=args.dont_search_deep,
         batch_size=args.batch_size,
     )
 

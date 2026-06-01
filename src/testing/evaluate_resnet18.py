@@ -216,39 +216,55 @@ def save_confusion_matrix(results, output_path):
     """
     class_names = results["class_names"]
     cm = confusion_matrix(results["labels"], results["predictions"])
-    
-    # Create figure
+
+    # Normalize by true-label row so color intensity reflects per-class recall distribution.
+    row_sums = cm.sum(axis=1, keepdims=True)
+    cm_normalized = np.divide(cm, row_sums, out=np.zeros_like(cm, dtype=float), where=row_sums != 0)
+
+    # Build annotations with both percentage and absolute count for each cell.
+    annot_labels = np.empty(cm.shape, dtype=object)
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            annot_labels[i, j] = f"{cm_normalized[i, j] * 100:.1f}%\n({cm[i, j]})"
+
+    # Main confusion matrix: color by normalized percentage, annotate with percentage + count.
     plt.figure(figsize=(10, 8))
     sns.heatmap(
-        cm,
-        annot=True,
-        fmt='d',
+        cm_normalized,
+        annot=annot_labels,
+        fmt='',
         cmap='Blues',
+        vmin=0.0,
+        vmax=1.0,
         xticklabels=class_names,
         yticklabels=class_names,
-        cbar_kws={'label': 'Count'}
+        cbar_kws={'label': 'Row-normalized percentage'}
     )
-    plt.title('Confusion Matrix')
+    plt.title('Confusion Matrix (Percentage + Count)')
     plt.ylabel('True Label')
     plt.xlabel('Predicted Label')
     plt.tight_layout()
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     logger.info(f"[INFO] Confusion matrix saved to: {output_path}")
-    
-    # Also save normalized confusion matrix
-    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    output_path_counts_npy = output_path.replace('.png', '.npy')
+    np.save(output_path_counts_npy, cm.astype(float))
+    logger.info(f"[INFO] Confusion matrix array saved to: {output_path_counts_npy}")
+
+    # Also save normalized-only confusion matrix for downstream aggregation.
     output_path_norm = output_path.replace('.png', '_normalized.png')
-    
     plt.figure(figsize=(10, 8))
     sns.heatmap(
         cm_normalized,
         annot=True,
-        fmt='.2%',
+        fmt='.1%',
         cmap='Blues',
+        vmin=0.0,
+        vmax=1.0,
         xticklabels=class_names,
         yticklabels=class_names,
-        cbar_kws={'label': 'Percentage'}
+        cbar_kws={'label': 'Row-normalized percentage'}
     )
     plt.title('Normalized Confusion Matrix')
     plt.ylabel('True Label')
@@ -257,6 +273,11 @@ def save_confusion_matrix(results, output_path):
     plt.savefig(output_path_norm, dpi=300, bbox_inches='tight')
     plt.close()
     logger.info(f"[INFO] Normalized confusion matrix saved to: {output_path_norm}")
+
+    # Save the normalized matrix as .npy for multi-run aggregation tooling.
+    output_path_norm_npy = output_path.replace('.png', '_normalized.npy')
+    np.save(output_path_norm_npy, cm_normalized)
+    logger.info(f"[INFO] Normalized confusion matrix array saved to: {output_path_norm_npy}")
 
 
 def save_classification_report(results, output_path):
