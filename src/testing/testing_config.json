@@ -1,0 +1,60 @@
+{
+  "execution": "python3 src/testing/test_multiple_splits.py --config $CONFIG --train --evaluate",
+  "hyperparameters": {
+    "batch_size": 16,
+    "epochs": 1,
+    "learning_rate": 0.0001,
+    "dataloader_num_workers": 4
+  },
+  "logging": {
+    "logger": "tensorboard",
+    "output_dir": "/home/ap/cloud/Master/aris_master/testing/02-18_1000_real_1000_synthetic",
+    "comment": "Second resnet training attempt. Training on 1000 real images, 1000 synthetic images. 500 normal wood, 500 impregnated wood. ",
+    "checkpointing_steps": 5,
+    "save_only": "lowest_val_loss",
+    "resume_from_checkpoint": true,
+    "checkpoint_dir": "/home/ap/cloud/Master/aris_master/testing/02-18_normal-wood_impregnated-wood_splits/resnet18_runs/2000-real_0-synthetic_run1/resnet18_lowest_val_loss.ckpt",
+    "seed": 42
+  },
+  "data": {
+    "resolution": 128,
+    "center_crop": true,
+    "random_flip": true,
+    "real_image_count": 1000,
+    "synthetic_image_count": 1000,
+    "classes": {
+      "impregnated_wood": {
+        "data_dir": "/home/ap/cloud/Master/dataset/datasets/wood/all_wood_categories",
+        "sub_categories": [
+          "impregnated_wood",
+          "impregnated_wood_painted",
+          "outdoor_wood",
+          "outdoor_wood_painted"
+        ]
+      },
+      "normal_wood": {
+        "data_dir": "/home/ap/cloud/Master/dataset/datasets/wood/all_wood_categories",
+        "sub_categories": [
+          "normal_wood",
+          "normal_wood_painted"
+        ]
+      }
+    },
+    "synthetic_data_dir": "/home/ap/cloud/Master/dataset/datasets/synthetic/aris_xpaste/synth",
+    "training_runs_per_split": 3,
+    "splits": {
+      "real_image_counts": [
+        1000,
+        1000,
+        1000,
+        1000
+      ],
+      "synthetic_image_counts": [
+        0,
+        500,
+        1000,
+        2000
+      ]
+    }
+  }
+}

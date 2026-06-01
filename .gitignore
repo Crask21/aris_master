@@ -1,8 +1,19 @@
+training/
+queue/
+Testing/
+#testing/
+test/
+GIF/
+
+# -------------------- VS Code python .gitignore template -------------------- #
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
-
+models/
+queue/
+testing/*
+# testing/
 # C extensions
 *.so
 

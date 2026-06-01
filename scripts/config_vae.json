@@ -1,0 +1,91 @@
+{
+  "diffusion_parameters": {
+    "lr_scheduler": null,
+    "ddpm_num_steps": 1000,
+    "ddpm_num_inference_steps": 50,
+    "ddpm_beta_schedule": null,
+    "use_ema": true,
+    "lr_warmup_steps": 500,
+    "_comment": "------------------ Secondary parameters: -----------------",
+    "adam_beta1": 0.95,
+    "adam_beta2": 0.999,
+    "adam_weight_decay": 1e-6,
+    "adam_epsilon": 1e-8,
+    "ema_inv_gamma": 1.0,
+    "ema_power": 0.75,
+    "ema_max_decay": 0.9999
+  },
+  "vae": {
+    "use_vae": true,
+    "vae_model_path": "/media/aris/Data/master2025dev/aris_master/models/VAE/vae-ft-mse-840000-ema-pruned"
+  },
+  "hyperparameters": {
+    "batch_size": 32,
+    "epochs": 4000,
+    "learning_rate": 0.00014,
+    "dataloader_num_workers": 4
+  },
+  "logging": {
+    "logger": "tensorboard",
+    "output_dir": "/media/aris/Data/master2025dev/aris_master/training/02-18_VAE_128/",
+    "comment": "Iterative work getting VAE to work",
+    "checkpointing_steps": 5,
+    "resume_from_checkpoint": true,
+    "save_images_epochs": 20,
+    "save_model_epochs": 20
+  },
+  "data": {
+    "resolution": 128,
+    "center_crop": true,
+    "random_flip": true,
+    "classes": {
+      "impregnated_wood": {
+        "data_dir": "/media/aris/Data/master2025dev/datasets/wood/4_main_categories",
+        "sub_categories": ["impregnated_wood"],
+        "train_img_count": 1000
+      }
+    }
+  },
+  "model": {
+    "_class_name": "UNet2DModel",
+    "_diffusers_version": "0.36.0",
+    "act_fn": "silu",
+    "add_attention": true,
+    "attention_head_dim": 8,
+    "attn_norm_num_groups": null,
+    "block_out_channels": [320, 640, 1280, 1280],
+    "center_input_sample": false,
+    "class_embed_type": null,
+    "down_block_types": [
+      "DownBlock2D",
+      "AttnDownBlock2D",
+      "AttnDownBlock2D",
+      "DownBlock2D"
+    ],
+    "downsample_padding": 1,
+    "downsample_type": "conv",
+    "dropout": 0.0,
+    "flip_sin_to_cos": true,
+    "freq_shift": 0,
+    "in_channels": 4,
+    "layers_per_block": 2,
+    "mid_block_scale_factor": 1,
+    "mid_block_type": "UNetMidBlock2D",
+    "norm_eps": 1e-5,
+    "norm_num_groups": 32,
+    "num_class_embeds": null,
+    "num_train_timesteps": null,
+    "out_channels": 4,
+    "resnet_time_scale_shift": "default",
+    "sample_size": null,
+    "time_embedding_dim": null,
+    "time_embedding_type": "positional",
+    "up_block_types": [
+      "UpBlock2D",
+      "AttnUpBlock2D",
+      "AttnUpBlock2D",
+      "UpBlock2D"
+    ],
+    "upsample_type": "conv"
+  }
+}

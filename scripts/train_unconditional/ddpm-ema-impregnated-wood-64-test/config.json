@@ -1,0 +1,14 @@
+{
+    "center_crop": true,
+    "gradient_accumulation_steps": 1,
+    "learning_rate": 0.0001,
+    "lr_warmup_steps": 500,
+    "mixed_precision": "no",
+    "num_epochs": 100,
+    "output_dir": "ddpm-ema-impregnated-wood-64-test",
+    "random_flip": true,
+    "resolution": 64,
+    "train_batch_size": 16,
+    "train_data_dir": "/media/aris/Data/master2025dev/datasets/wood/all_wood_categories/normal_wood",
+    "use_ema": true
+}
